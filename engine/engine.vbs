@@ -5,6 +5,7 @@
 ' 输出: <前缀>_raw.txt（原始屏幕输出）、<前缀>_status.txt（IP<TAB>状态<TAB>原因）
 ' 状态: SUCCESS / FAIL / STOPPED
 ' 注意: 不使用 crt.Quit —— SecureCRT 单实例，Quit 会关掉用户自己的窗口
+' 提示符为华为 VRP 用户视图 <主机名>（字面量，取自任务文件主机名字段）
 Option Explicit
 
 Dim g_fso
@@ -82,9 +83,14 @@ Sub Main()
         Exit Sub
     End If
 
+    ' 全程容错：脚本运行时错误降级为失败状态，由主程序状态轮询收敛
     On Error Resume Next
     crt.Session.Connect "/SSH2 /ACCEPTHOSTKEYS /L " & user & " /PASSWORD """ & passwd & """ " & ip
-    On Error GoTo 0
+    If Err.Number <> 0 Then
+        WriteStatus prefix, ip, "FAIL", "连接异常: " & Err.Description
+        DisconnectQuietly
+        Exit Sub
+    End If
 
     n = crt.Screen.WaitForString("<", 30)
     If Not n Then
@@ -102,12 +108,13 @@ Sub Main()
     End If
 
     crt.Screen.Send command & vbCr
-    rawOut = crt.Screen.ReadString("<[^\s>]+>", timeoutSec)
+    ' 字面量提示符 <主机名>（取任务文件主机名字段），避免输出中的 <> 内容提前截断捕获
+    rawOut = crt.Screen.ReadString("<" & hostname & ">", timeoutSec)
 
     If rawOut = "" Then
         n = crt.Screen.WaitForString("<", 2)
         If n Then
-            WriteStatus prefix, ip, "FAIL", "输出捕获异常"
+            WriteStatus prefix, ip, "FAIL", "输出捕获异常(提示符与清单主机名可能不符)"
         Else
             WriteStatus prefix, ip, "FAIL", "指令执行超时(" & timeoutSec & "秒)"
         End If
