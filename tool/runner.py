@@ -13,6 +13,7 @@ from tool.taskfiles import (
     Server,
     ServerResult,
     read_status,
+    write_status,
     write_task_file,
 )
 
@@ -113,7 +114,8 @@ class Runner:
             if st is not None:
                 rec.status, rec.reason = st
                 rec.done = True
-                self._running -= 1
+                if rec.launch_time is not None:
+                    self._running -= 1
                 self._emit("status", rec.server.ip, rec.status)
                 continue
             if rec.launch_time is not None and now - rec.launch_time > self.cfg.per_deadline:
@@ -126,7 +128,11 @@ class Runner:
                 rec.launch_time = now
                 self._running += 1
                 self._emit("log", rec.server.ip, "启动取数")
-                self._launcher(self, rec)
+                try:
+                    self._launcher(self, rec)
+                except Exception as e:
+                    # 启动异常不中断整个批次：记为失败，由状态轮询收敛
+                    write_status(self._status_path(rec), rec.server.ip, "FAIL", f"启动失败: {e}")
                 continue
             if rec.launch_time is None and self._stopped:
                 rec.status, rec.reason = "STOPPED", "用户停止"

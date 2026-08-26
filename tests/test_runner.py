@@ -99,3 +99,33 @@ def test_per_server_deadline_marks_fail(tmp_path: Path):
     r.tick()
     results = r.results()
     assert all(x.status == "FAIL" and x.reason == "超时未返回" for x in results)
+
+
+def test_launcher_failure_marks_record_fail(tmp_path: Path):
+    servers = make_servers(1)
+    cfg = make_cfg(tmp_path, concurrency=1)
+
+    def bad_launcher(runner, rec):
+        raise OSError("模拟启动异常")
+
+    cfg.launcher = bad_launcher
+    r = Runner(servers, cfg)
+    r.start()
+    assert run_until_done(r)
+    results = r.results()
+    assert results[0].status == "FAIL"
+    assert "启动失败" in results[0].reason
+
+
+def test_success_without_raw_file_becomes_fail(tmp_path: Path):
+    servers = make_servers(1)
+    cfg = make_cfg(tmp_path, concurrency=1)
+    cfg.launcher = lambda runner, rec: write_status(
+        tmp_path / "results" / f"{rec.server.ip}_status.txt", rec.server.ip, "SUCCESS", ""
+    )
+    r = Runner(servers, cfg)
+    r.start()
+    assert run_until_done(r)
+    results = r.results()
+    assert results[0].status == "FAIL"
+    assert results[0].reason == "原始输出文件缺失"
