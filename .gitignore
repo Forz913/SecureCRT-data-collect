@@ -10,3 +10,4 @@ results/
 config.json
 stop.flag
 *.xlsx
+iplist.txt
