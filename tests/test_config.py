@@ -34,3 +34,32 @@ def test_load_corrupted_json_returns_defaults(tmp_path: Path):
     p.write_text("{not valid json", encoding="utf-8")
     cfg = load(p)
     assert cfg.command == "disp alarm hardware"
+
+
+def test_string_false_is_parsed_as_false(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text('{"sim_mode": "false"}', encoding="utf-8")
+    assert load(p).sim_mode is False
+    p.write_text('{"sim_mode": "true"}', encoding="utf-8")
+    assert load(p).sim_mode is True
+
+
+def test_bad_field_does_not_discard_servers(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(
+        '{"timeout": "abc", "servers": [["1.1.1.1", "h1", "u1", "p1"]]}',
+        encoding="utf-8",
+    )
+    cfg = load(p)
+    assert cfg.timeout == 60  # 坏字段回退默认值
+    assert len(cfg.servers) == 1  # 服务器清单保留
+
+
+def test_wrong_length_server_entry_filtered(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(
+        '{"servers": [["1.1.1.1", "h1", "u1", "p1"], ["2.2.2.2", "h2"]]}',
+        encoding="utf-8",
+    )
+    cfg = load(p)
+    assert [s.ip for s in cfg.servers] == ["1.1.1.1"]
