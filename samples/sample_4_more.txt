@@ -1,0 +1,8 @@
+disp alarm hardware
+--------------------------------------------------------------------------------
+Index  Level    Date       Time           Info
+--------------------------------------------------------------------------------
+1      Critical 2023-04-28 01:02:41+08:00 PM7 POWER 25 is failed
+  ---- More ----
+2      Minor    2023-04-29 09:00:00+08:00 Fan 1 speed is abnormal
+<GDHEY-MS-IPMAN-BNG01-LPLJ-HW>

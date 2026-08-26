@@ -1,0 +1,8 @@
+disp alarm hardware
+--------------------------------------------------------------------------------
+Index  Level    Date       Time           Info
+--------------------------------------------------------------------------------
+1      Critical 2023-04-28 01:02:41+08:00 PM7 POWER 25 is failed, the B plane po
+                                          wer supply became faulty[OID:1.3.6.1.4
+                                          .1.2011.5.25.219.2.5.5,EntCode:136961]
+<GDHEY-MS-IPMAN-BNG01-LPLJ-HW>
