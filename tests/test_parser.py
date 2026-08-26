@@ -43,3 +43,29 @@ def test_more_markers_are_removed():
 def test_garbage_text_is_ignored():
     raw = "hello\nsome random text\n<host>\n"
     assert parse_output(raw) == []
+
+
+def test_crlf_input_is_normalized():
+    raw = read_sample("sample_1_normal.txt").replace("\n", "\r\n")
+    assert parse_output(raw)[0]["level"] == "Critical"
+
+
+def test_indented_footer_is_not_attached():
+    raw = read_sample("sample_2_multiple.txt") + "  Total: 3 alarms\n"
+    alarms = parse_output(raw)
+    assert len(alarms) == 3
+    assert "Total" not in alarms[-1]["info"]
+
+
+def test_time_without_timezone_is_parsed():
+    raw = (
+        "disp alarm hardware\n"
+        "--------------------------------------------------------------------------------\n"
+        "Index  Level    Date       Time           Info\n"
+        "--------------------------------------------------------------------------------\n"
+        "1      Warning  2023-05-10 12:30:00 Board 3 temperature is high\n"
+        "<host>\n"
+    )
+    alarms = parse_output(raw)
+    assert len(alarms) == 1
+    assert alarms[0]["time"] == "12:30:00"

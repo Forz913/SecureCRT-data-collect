@@ -10,7 +10,8 @@ ALARM_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2})\s+"
     r"(\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2})?)\s*(.*)$"
 )
-CONTINUATION_RE = re.compile(r"^ +(\S.*)$")
+# 折行对齐 Info 列（样例为 42 空格）；阈值 20 排除表尾轻缩进的脚注行
+CONTINUATION_RE = re.compile(r"^ {20,}(\S.*)$")
 SEPARATOR_RE = re.compile(r"^[-= ]+$")
 HEADER_RE = re.compile(r"^Index\b")
 
