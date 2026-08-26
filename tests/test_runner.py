@@ -1,0 +1,101 @@
+from pathlib import Path
+
+from tool.runner import RunConfig, Runner
+from tool.taskfiles import Server, write_status
+
+
+def make_cfg(tmp_path: Path, **kw) -> RunConfig:
+    defaults = dict(
+        command="disp alarm hardware",
+        timeout=60,
+        concurrency=2,
+        sim_mode=True,
+        securecrt_path="",
+        engine_path="",
+        task_dir=tmp_path / "task",
+        results_dir=tmp_path / "results",
+        stop_flag_path=tmp_path / "stop.flag",
+        per_deadline=300.0,
+        on_event=None,
+    )
+    defaults.update(kw)
+    return RunConfig(**defaults)
+
+
+def make_servers(n: int) -> list[Server]:
+    return [Server(ip=f"10.0.0.{i}", hostname=f"h{i}", username="u", password="p") for i in range(1, n + 1)]
+
+
+def run_until_done(runner: Runner, max_ticks: int = 50) -> bool:
+    for _ in range(max_ticks):
+        if runner.tick():
+            return True
+    return False
+
+
+def test_all_servers_finish_with_sim_engine(tmp_path: Path):
+    servers = make_servers(5)
+    r = Runner(servers, make_cfg(tmp_path))
+    r.start()
+    assert run_until_done(r)
+    results = r.results()
+    assert [x.ip for x in results] == [s.ip for s in servers]
+    # 模拟引擎: 序号 4（第 5 台）映射为失败样例，其余成功
+    assert [x.status for x in results] == ["SUCCESS"] * 4 + ["FAIL"]
+    assert results[4].reason == "输出为空(模拟)"
+    # 完成后清理 stop.flag
+    assert not tmp_path.joinpath("stop.flag").exists()
+
+
+def test_concurrency_limit_respected(tmp_path: Path):
+    servers = make_servers(5)
+    launched: list[str] = []
+
+    def fake_launch(runner, rec):
+        launched.append(rec.server.ip)
+        # 不写状态文件：模拟仍在运行的引擎
+
+    cfg = make_cfg(tmp_path, concurrency=2, per_deadline=300.0)
+    cfg.launcher = fake_launch
+    r = Runner(servers, cfg)
+    r.start()
+    r.tick()
+    assert launched == ["10.0.0.1", "10.0.0.2"]  # 第一批最多并发数台
+    r.tick()
+    assert launched == ["10.0.0.1", "10.0.0.2"]  # 未完成前不再启动新的
+
+    # 手动写入状态模拟两台完成
+    for ip in ["10.0.0.1", "10.0.0.2"]:
+        write_status(tmp_path / "results" / f"{ip}_status.txt", ip, "SUCCESS", "")
+    r.tick()  # 标记完成
+    r.tick()  # 启动下一批
+    assert launched == ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"]
+
+
+def test_stop_marks_pending_as_stopped(tmp_path: Path):
+    servers = make_servers(5)
+    cfg = make_cfg(tmp_path, concurrency=2, per_deadline=300.0)
+    cfg.launcher = lambda runner, rec: None  # 引擎永远不完成
+    r = Runner(servers, cfg)
+    r.start()
+    r.tick()  # 启动 2 台
+    assert tmp_path.joinpath("stop.flag").exists() is False
+    r.request_stop()
+    assert tmp_path.joinpath("stop.flag").exists()
+    r.tick()
+    # 未启动的 3 台立即记为已停止；已启动的 2 台等自然结束
+    results = r.results()
+    stopped = [x for x in results if x.status == "STOPPED"]
+    assert len(stopped) == 3
+
+
+def test_per_server_deadline_marks_fail(tmp_path: Path):
+    servers = make_servers(2)
+    cfg = make_cfg(tmp_path, concurrency=2, per_deadline=0.0)  # 立即超时
+    cfg.launcher = lambda runner, rec: None
+    r = Runner(servers, cfg)
+    r.start()
+    r.tick()
+    r.tick()
+    results = r.results()
+    assert all(x.status == "FAIL" and x.reason == "超时未返回" for x in results)
