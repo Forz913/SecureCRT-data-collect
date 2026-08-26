@@ -129,3 +129,13 @@ def test_success_without_raw_file_becomes_fail(tmp_path: Path):
     results = r.results()
     assert results[0].status == "FAIL"
     assert results[0].reason == "原始输出文件缺失"
+
+
+def test_progress_reflects_done_ratio(tmp_path: Path):
+    servers = make_servers(4)
+    cfg = make_cfg(tmp_path, concurrency=4)
+    r = Runner(servers, cfg)
+    r.start()
+    assert r.progress() == 0.0
+    assert run_until_done(r)
+    assert r.progress() == 1.0

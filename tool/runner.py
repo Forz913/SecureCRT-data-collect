@@ -163,3 +163,8 @@ class Runner:
                 )
             )
         return out
+
+    def progress(self) -> float:
+        """完成比例 0.0-1.0。"""
+        total = max(len(self._records), 1)
+        return sum(1 for rec in self._records if rec.done) / total

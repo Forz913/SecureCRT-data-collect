@@ -306,9 +306,7 @@ class MainWindow:
         if self.runner and self.runner.tick():
             self._on_done()
         elif self.runner:
-            total = max(len(self.runner._records), 1)
-            done = sum(1 for r in self.runner._records if r.done)
-            self.progress["value"] = done * 100.0 / total
+            self.progress["value"] = self.runner.progress() * 100.0
             self.root.after(self.POLL_MS, self._tick)
 
     def _on_done(self) -> None:
@@ -320,6 +318,11 @@ class MainWindow:
             write_workbook(Path(self.cfg.excel_path), results)
         except Exception as e:
             messagebox.showerror("错误", f"生成 Excel 失败：{e}")
+            self._log(f"生成 Excel 失败：{e}")
+            self.start_btn.config(state="normal")
+            self.stop_btn.config(state="disabled")
+            self.runner = None
+            return
         ok = sum(1 for r in results if r.status == "SUCCESS")
         bad = len(results) - ok
         self.progress["value"] = 100
@@ -359,8 +362,16 @@ class MainWindow:
     def _sync_config_from_ui(self) -> None:
         self.cfg.servers = self._servers_from_tree()
         self.cfg.command = self.command_var.get()
-        self.cfg.timeout = int(self.timeout_var.get())
-        self.cfg.concurrency = int(self.concurrency_var.get())
+        try:
+            self.cfg.timeout = int(self.timeout_var.get())
+        except (ValueError, tk.TclError):
+            self.cfg.timeout = 60
+        self.cfg.timeout = max(10, min(600, self.cfg.timeout))
+        try:
+            self.cfg.concurrency = int(self.concurrency_var.get())
+        except (ValueError, tk.TclError):
+            self.cfg.concurrency = 5
+        self.cfg.concurrency = max(1, min(10, self.cfg.concurrency))
         self.cfg.sim_mode = bool(self.sim_var.get())
         self.cfg.securecrt_path = self.securecrt_var.get().strip()
         self.cfg.excel_path = self.excel_var.get().strip()
