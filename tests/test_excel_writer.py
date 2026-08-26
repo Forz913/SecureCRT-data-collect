@@ -53,3 +53,16 @@ def test_stopped_status_shown_in_summary(tmp_path: Path):
     ws = wb["汇总"]
     rows = list(ws.values)
     assert rows[1][2] == "已停止"
+
+
+def test_all_level_counts_in_summary(tmp_path: Path):
+    results = [make_result("4.4.4.4", "SUCCESS", "", [
+        {"index": "1", "level": "Critical", "date": "d", "time": "t", "info": "i"},
+        {"index": "2", "level": "Major", "date": "d", "time": "t", "info": "i"},
+        {"index": "3", "level": "Minor", "date": "d", "time": "t", "info": "i"},
+        {"index": "4", "level": "Warning", "date": "d", "time": "t", "info": "i"},
+    ])]
+    out = tmp_path / "levels.xlsx"
+    write_workbook(out, results)
+    rows = list(load_workbook(out)["汇总"].values)
+    assert rows[1][5:9] == (1, 1, 1, 1)

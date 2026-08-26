@@ -53,5 +53,10 @@ def _style_header(ws) -> None:
 
 def _auto_width(ws) -> None:
     for col in ws.columns:
-        width = max(len(str(c.value)) for c in col if c.value is not None)
+        width = max(_display_width(c.value) for c in col if c.value is not None)
         ws.column_dimensions[col[0].column_letter].width = min(width + 4, 60)
+
+
+def _display_width(value) -> int:
+    # CJK 字符在 Excel 中约占 2 个宽度单位
+    return sum(2 if ord(ch) > 127 else 1 for ch in str(value))
