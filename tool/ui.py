@@ -395,11 +395,22 @@ class MainWindow:
         self._refresh_server_tree()
 
     def _save_config(self) -> None:
-        cfg_save(self.cfg_path, self.cfg)
+        try:
+            cfg_save(self.cfg_path, self.cfg)
+        except OSError as e:
+            messagebox.showwarning("提示", f"配置保存失败（目录可能不可写）：{e}")
 
     def _on_close(self) -> None:
-        if self.runner and not messagebox.askyesno("确认", "任务正在运行，确定退出？"):
-            return
+        if self.runner:
+            if not messagebox.askyesno("确认", "任务正在运行，确定退出？"):
+                return
+            # 停止未开始的机器并清理含明文密码的任务文件
+            self.runner.request_stop()
+            for p in self.runner.cfg.task_dir.glob("*.txt"):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
         self._sync_config_from_ui()
         self._save_config()
         self.root.destroy()
