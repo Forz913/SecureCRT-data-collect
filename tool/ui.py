@@ -201,7 +201,12 @@ class MainWindow:
         if not path:
             return
         added = 0
-        for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        data = Path(path).read_bytes()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("gbk", errors="replace")
+        for line in text.splitlines():
             s = parse_server_line(line)
             if s:
                 self.cfg.servers.append(s)
@@ -213,8 +218,9 @@ class MainWindow:
         sel = self.server_tree.selection()
         if not sel:
             return
-        for iid in sel:
-            del self.cfg.servers[self.server_tree.index(iid)]
+        doomed = {tuple(self.server_tree.item(iid, "values")) for iid in sel}
+        self.cfg.servers = [s for s in self.cfg.servers
+                            if (s.ip, s.hostname, s.username, s.password) not in doomed]
         self._refresh_server_tree()
 
     def _clear_servers(self) -> None:
@@ -255,6 +261,9 @@ class MainWindow:
     def _validate(self) -> str:
         if not self.cfg.servers:
             return "服务器清单为空"
+        ips = [s.ip for s in self.cfg.servers]
+        if len(ips) != len(set(ips)):
+            return "清单中存在重复 IP"
         if not self.cfg.command.strip():
             return "查询指令为空"
         if not self.cfg.excel_path.strip():
@@ -389,6 +398,8 @@ class MainWindow:
         cfg_save(self.cfg_path, self.cfg)
 
     def _on_close(self) -> None:
+        if self.runner and not messagebox.askyesno("确认", "任务正在运行，确定退出？"):
+            return
         self._sync_config_from_ui()
         self._save_config()
         self.root.destroy()
