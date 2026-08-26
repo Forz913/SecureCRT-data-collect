@@ -139,3 +139,18 @@ def test_progress_reflects_done_ratio(tmp_path: Path):
     assert r.progress() == 0.0
     assert run_until_done(r)
     assert r.progress() == 1.0
+
+
+def test_cleanup_removes_task_files(tmp_path: Path):
+    servers = make_servers(2)
+    cfg = make_cfg(tmp_path, concurrency=2)
+    # 预置两个任务文件模拟真实模式
+    for s in servers:
+        task = tmp_path / "task" / f"{s.ip}.txt"
+        task.parent.mkdir(parents=True, exist_ok=True)
+        task.write_text("x", encoding="utf-8")
+    r = Runner(servers, cfg)
+    r.start()
+    assert run_until_done(r)
+    for s in servers:
+        assert not (tmp_path / "task" / f"{s.ip}.txt").exists()

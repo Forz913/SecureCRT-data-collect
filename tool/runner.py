@@ -146,6 +146,10 @@ class Runner:
     def _cleanup(self) -> None:
         if self.cfg.stop_flag_path.exists():
             self.cfg.stop_flag_path.unlink()
+        for rec in self._records:
+            p = self.cfg.task_dir / f"{rec.server.ip}.txt"
+            if p.exists():
+                p.unlink()
 
     def results(self) -> list[ServerResult]:
         out: list[ServerResult] = []
