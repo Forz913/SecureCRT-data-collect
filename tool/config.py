@@ -15,7 +15,7 @@ class AppConfig:
     command: str = "disp alarm hardware"
     timeout: int = 60
     concurrency: int = 5
-    sim_mode: bool = True  # 默认模拟模式：开发机/无 SecureCRT 环境首次打开即可试用
+    sim_mode: bool = False  # 默认真实模式，开发机测试需手动勾选模拟
 
 
 def _get_str(data: dict, key: str, default: str) -> str:

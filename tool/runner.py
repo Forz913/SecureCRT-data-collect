@@ -37,7 +37,10 @@ def _default_launcher(runner, rec) -> None:
     if runner.cfg.sim_mode:
         from tool.simulation import simulate_server
 
-        simulate_server(rec.server, rec.index, runner._status_path(rec), runner._raw_path(rec))
+        simulate_server(
+            rec.server, rec.index, runner._status_path(rec), runner._raw_path(rec),
+            run_id=runner._run_id,
+        )
     else:
         task_path = runner.cfg.task_dir / f"{rec.server.ip}.txt"
         write_task_file(
@@ -47,6 +50,7 @@ def _default_launcher(runner, rec) -> None:
             runner.cfg.timeout,
             result_prefix=str(runner._result_prefix(rec)),
             stop_flag_path=str(runner.cfg.stop_flag_path),
+            run_id=runner._run_id,
         )
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.Popen(
@@ -88,6 +92,7 @@ class Runner:
             self.cfg.on_event(event, ip, payload)
 
     def start(self) -> None:
+        self._run_id = f"{time.time_ns()}"
         self.cfg.task_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.results_dir.mkdir(parents=True, exist_ok=True)
         if self.cfg.stop_flag_path.exists():
@@ -112,7 +117,10 @@ class Runner:
                 continue
             st = read_status(self._status_path(rec))
             if st is not None:
-                rec.status, rec.reason = st
+                status, reason, rid = st
+                if rid and rid != self._run_id:
+                    continue  # 上一轮运行遗留引擎的迟到状态，忽略
+                rec.status, rec.reason = status, reason
                 rec.done = True
                 if rec.launch_time is not None:
                     self._running -= 1

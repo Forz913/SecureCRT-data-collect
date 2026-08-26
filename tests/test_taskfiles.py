@@ -17,6 +17,7 @@ def test_task_file_roundtrip_with_chinese_and_special_chars(tmp_path: Path):
         task, server, command="disp alarm hardware", timeout=60,
         result_prefix=str(tmp_path / "results" / server.ip),
         stop_flag_path=str(tmp_path / "stop.flag"),
+        run_id="rid123",
     )
     lines = task.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "188.12.4.21"
@@ -27,14 +28,15 @@ def test_task_file_roundtrip_with_chinese_and_special_chars(tmp_path: Path):
     assert lines[5] == "disp alarm hardware"
     assert lines[6] == str(tmp_path / "results" / "188.12.4.21")
     assert lines[7] == str(tmp_path / "stop.flag")
+    assert lines[8] == "rid123"
 
 
 def test_status_write_read_roundtrip(tmp_path: Path):
     p = tmp_path / "results" / "1.2.3.4_status.txt"
     write_status(p, "1.2.3.4", "SUCCESS", "")
-    assert read_status(p) == ("SUCCESS", "")
+    assert read_status(p) == ("SUCCESS", "", "")
     write_status(p, "1.2.3.4", "FAIL", "超时")
-    assert read_status(p) == ("FAIL", "超时")
+    assert read_status(p) == ("FAIL", "超时", "")
 
 
 def test_read_status_missing_file_returns_none(tmp_path: Path):
@@ -57,7 +59,7 @@ def test_status_file_exact_bytes(tmp_path: Path):
     p = tmp_path / "results" / "1.2.3.4_status.txt"
     write_status(p, "1.2.3.4", "FAIL", "连接失败")
     data = p.read_bytes()
-    assert data == "1.2.3.4\tFAIL\t连接失败".encode("utf-8")
+    assert data == "1.2.3.4\tFAIL\t连接失败\t".encode("utf-8")
     assert not data.endswith(b"\n")
 
 
@@ -65,7 +67,7 @@ def test_read_status_handles_utf8_bom(tmp_path: Path):
     p = tmp_path / "results" / "1.2.3.4_status.txt"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"\xef\xbb\xbf" + "1.2.3.4\tFAIL\t超时".encode("utf-8"))
-    assert read_status(p) == ("FAIL", "超时")
+    assert read_status(p) == ("FAIL", "超时", "")
 
 
 def test_read_raw_handles_utf8_bom(tmp_path: Path):
@@ -87,3 +89,20 @@ def test_read_status_empty_file_returns_none(tmp_path: Path):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("", encoding="utf-8")
     assert read_status(p) is None
+
+
+def test_read_status_returns_run_id(tmp_path: Path):
+    p = tmp_path / "results" / "1.2.3.4_status.txt"
+    write_status(p, "1.2.3.4", "SUCCESS", "", "r123")
+    assert read_status(p) == ("SUCCESS", "", "r123")
+
+
+def test_is_valid_ip():
+    from tool.taskfiles import is_valid_ip
+    assert is_valid_ip("188.12.4.21")
+    assert is_valid_ip("0.0.0.0")
+    assert is_valid_ip("255.255.255.255")
+    assert not is_valid_ip("999.1.1.1")
+    assert not is_valid_ip("1.2.3")
+    assert not is_valid_ip("abc")
+    assert not is_valid_ip("..\\..\\evil")

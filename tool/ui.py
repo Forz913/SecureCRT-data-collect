@@ -12,7 +12,7 @@ from tool.locate import find_securecrt
 from tool.parser import parse_output
 from tool.paths import app_dir, resource_path
 from tool.runner import RunConfig, Runner
-from tool.taskfiles import Server, parse_server_line, read_raw
+from tool.taskfiles import Server, is_valid_ip, parse_server_line, read_raw
 
 
 def default_excel_name() -> str:
@@ -167,6 +167,9 @@ class MainWindow:
                             username=fields["username"].get().strip(), password=fields["password"].get())
             if not server.ip or not server.username or not server.password:
                 messagebox.showwarning("提示", "IP、账号、密码不能为空", parent=dlg)
+                return
+            if not is_valid_ip(server.ip):
+                messagebox.showwarning("提示", "IP 格式无效（应为 IPv4 地址）", parent=dlg)
                 return
             if iid:
                 self.cfg.servers[self.server_tree.index(iid)] = server
@@ -335,8 +338,9 @@ class MainWindow:
         ok = sum(1 for r in results if r.status == "SUCCESS")
         bad = len(results) - ok
         self.progress["value"] = 100
-        self._log(f"完成：成功 {ok} 台，失败/停止 {bad} 台，已保存到 {self.cfg.excel_path}")
-        messagebox.showinfo("完成", f"成功 {ok} 台，失败/停止 {bad} 台\nExcel 已保存到：\n{self.cfg.excel_path}")
+        sim_note = "（模拟数据，非真实结果！）" if self.cfg.sim_mode else ""
+        self._log(f"完成：成功 {ok} 台，失败/停止 {bad} 台，已保存到 {self.cfg.excel_path}{sim_note}")
+        messagebox.showinfo("完成", f"成功 {ok} 台，失败/停止 {bad} 台{sim_note}\nExcel 已保存到：\n{self.cfg.excel_path}")
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.runner = None

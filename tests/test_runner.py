@@ -154,3 +154,49 @@ def test_cleanup_removes_task_files(tmp_path: Path):
     assert run_until_done(r)
     for s in servers:
         assert not (tmp_path / "task" / f"{s.ip}.txt").exists()
+
+
+def test_stale_run_id_status_is_ignored(tmp_path: Path):
+    servers = make_servers(1)
+    cfg = make_cfg(tmp_path, concurrency=1, per_deadline=300.0)
+    cfg.launcher = lambda runner, rec: None  # 引擎不自动完成
+    r = Runner(servers, cfg)
+    r.start()
+    rid = r._run_id
+    write_status(tmp_path / "results" / "10.0.0.1_status.txt",
+                 "10.0.0.1", "SUCCESS", "在途", "stale-rid")
+    r.tick()
+    assert not r._records[0].done  # run_id 不匹配，忽略
+    write_status(tmp_path / "results" / "10.0.0.1_status.txt",
+                 "10.0.0.1", "SUCCESS", "", rid)
+    # 补写原始输出文件：results() 对 SUCCESS 但缺 raw 的记录会降级为 FAIL（见
+    # test_success_without_raw_file_becomes_fail），本测试聚焦 run_id 过滤不关心该降级
+    (tmp_path / "results" / "10.0.0.1_raw.txt").write_text("ok\n", encoding="utf-8")
+    assert run_until_done(r)
+    assert r.results()[0].status == "SUCCESS"
+
+
+def test_real_mode_launcher_writes_task_and_spawns_securecrt(tmp_path: Path):
+    import subprocess
+    from unittest import mock
+
+    from tool.runner import Runner, _default_launcher
+
+    cfg = make_cfg(tmp_path, sim_mode=False,
+                   securecrt_path=r"C:\fake\SecureCRT.exe",
+                   engine_path=r"C:\fake\engine.vbs")
+    r = Runner(make_servers(1), cfg)
+    rec = r._records[0]
+    r.start()
+    with mock.patch("subprocess.Popen") as popen:
+        _default_launcher(r, rec)
+    task = tmp_path / "task" / "10.0.0.1.txt"
+    assert task.exists()
+    assert task.read_text(encoding="utf-8").splitlines()[8] == r._run_id
+    args = popen.call_args[0][0]
+    assert args[0] == r"C:\fake\SecureCRT.exe"
+    assert args[1] == "/SCRIPT"
+    assert args[2] == r"C:\fake\engine.vbs"
+    assert args[3] == "/ARG"
+    assert args[4] == str(task)
+    assert popen.call_args[1]["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)

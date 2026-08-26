@@ -26,7 +26,7 @@ def test_load_missing_file_returns_defaults(tmp_path: Path):
     assert cfg.command == "disp alarm hardware"
     assert cfg.timeout == 60
     assert cfg.concurrency == 5
-    assert cfg.sim_mode is True
+    assert cfg.sim_mode is False
 
 
 def test_load_corrupted_json_returns_defaults(tmp_path: Path):

@@ -14,13 +14,13 @@ SAMPLES = [
 ]
 
 
-def simulate_server(server: Server, index: int, status_path: Path, raw_path: Path) -> None:
+def simulate_server(server: Server, index: int, status_path: Path, raw_path: Path, run_id: str = "") -> None:
     """index % 5 == 4 映射为失败样例，其余映射为成功样例。"""
     status_path.parent.mkdir(parents=True, exist_ok=True)
     if index % 5 == 4:
         raw_path.write_text("<host>\r\n", encoding="utf-8")
-        write_status(status_path, server.ip, "FAIL", "输出为空(模拟)")
+        write_status(status_path, server.ip, "FAIL", "输出为空(模拟)", run_id)
         return
     sample = Path(resource_path("samples")) / SAMPLES[index % 4]
     raw_path.write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
-    write_status(status_path, server.ip, "SUCCESS", "")
+    write_status(status_path, server.ip, "SUCCESS", "", run_id)
