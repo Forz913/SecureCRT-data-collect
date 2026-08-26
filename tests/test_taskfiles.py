@@ -51,3 +51,39 @@ def test_parse_server_line():
                        username="heyuanyingji", password="HYhch!123")
     assert parse_server_line("only three fields here") is None
     assert parse_server_line("") is None
+
+
+def test_status_file_exact_bytes(tmp_path: Path):
+    p = tmp_path / "results" / "1.2.3.4_status.txt"
+    write_status(p, "1.2.3.4", "FAIL", "连接失败")
+    data = p.read_bytes()
+    assert data == "1.2.3.4\tFAIL\t连接失败".encode("utf-8")
+    assert not data.endswith(b"\n")
+
+
+def test_read_status_handles_utf8_bom(tmp_path: Path):
+    p = tmp_path / "results" / "1.2.3.4_status.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xef\xbb\xbf" + "1.2.3.4\tFAIL\t超时".encode("utf-8"))
+    assert read_status(p) == ("FAIL", "超时")
+
+
+def test_read_raw_handles_utf8_bom(tmp_path: Path):
+    p = tmp_path / "results" / "1.2.3.4_raw.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xef\xbb\xbfdisp alarm hardware\n")
+    assert read_raw(p) == "disp alarm hardware\n"
+
+
+def test_read_raw_returns_content(tmp_path: Path):
+    p = tmp_path / "results" / "1.2.3.4_raw.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("hello\n", encoding="utf-8")
+    assert read_raw(p) == "hello\n"
+
+
+def test_read_status_empty_file_returns_none(tmp_path: Path):
+    p = tmp_path / "results" / "x_status.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("", encoding="utf-8")
+    assert read_status(p) is None

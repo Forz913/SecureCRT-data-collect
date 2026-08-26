@@ -3,7 +3,7 @@
 task/<IP>.txt: UTF-8，每行一个字段，共 8 行:
   IP / 主机名 / 账号 / 密码 / 超时秒数 / 查询指令 / 结果前缀(绝对路径) / 停止标志文件(绝对路径)
 results/<IP>_status.txt: IP<TAB>状态<TAB>原因（SUCCESS / FAIL / STOPPED）
-results/<IP>_raw.txt: 原始屏幕输出（UTF-8）
+results/<IP>_raw.txt: 原始屏幕输出（引擎写入的 UTF-8 含 BOM，读取时用 utf-8-sig 剥离）
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def read_status(path: Path) -> tuple[str, str] | None:
     """返回 (状态, 原因)；文件不存在或格式不对返回 None。"""
     if not path.exists():
         return None
-    parts = path.read_text(encoding="utf-8").rstrip("\n").split("\t")
+    parts = path.read_text(encoding="utf-8-sig").rstrip("\n").split("\t")
     if len(parts) < 3:
         return None
     return parts[1], parts[2]
@@ -72,7 +72,7 @@ def read_status(path: Path) -> tuple[str, str] | None:
 def read_raw(path: Path) -> str:
     if not path.exists():
         return ""
-    return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8-sig")
 
 
 def _is_ipv4(value: str) -> bool:
