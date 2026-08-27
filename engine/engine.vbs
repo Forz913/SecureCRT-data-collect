@@ -1,6 +1,6 @@
 ' engine.vbs - SecureCRT 批量取数引擎（每进程一台服务器）
 ' 用法: SecureCRT.exe /SCRIPT engine.vbs /ARG <任务文件绝对路径>
-' 任务文件: UTF-8，每行一个字段，共 8 行:
+' 任务文件: UTF-8，每行一个字段，共 9 行:
 '   IP / 主机名 / 账号 / 密码 / 超时秒数 / 查询指令 / 结果文件前缀(绝对路径) / 停止标志文件(绝对路径) / run_id
 ' 输出: <前缀>_raw.txt（原始屏幕输出）、<前缀>_status.txt（IP<TAB>状态<TAB>原因<TAB>run_id）
 ' 状态: SUCCESS / FAIL / STOPPED
@@ -113,7 +113,7 @@ Sub Main()
     rawOut = crt.Screen.ReadString("<" & hostname & ">", timeoutSec)
 
     If rawOut = "" Then
-        n = crt.Screen.WaitForString("<", 2)
+        n = crt.Screen.WaitForString("<" & hostname & ">", 2)
         If n Then
             WriteStatus prefix, ip, "FAIL", "输出捕获异常(提示符与清单主机名可能不符)", runId
         Else
