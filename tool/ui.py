@@ -327,7 +327,7 @@ class MainWindow:
             if r.status == "SUCCESS":
                 r.alarms = parse_output(read_raw(r.raw_path))
         try:
-            write_workbook(Path(self.cfg.excel_path), results)
+            write_workbook(Path(self.cfg.excel_path), results, sim_mode=self.cfg.sim_mode)
         except Exception as e:
             messagebox.showerror("错误", f"生成 Excel 失败：{e}")
             self._log(f"生成 Excel 失败：{e}")

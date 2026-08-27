@@ -66,7 +66,7 @@ def test_concurrency_limit_respected(tmp_path: Path):
 
     # 手动写入状态模拟两台完成
     for ip in ["10.0.0.1", "10.0.0.2"]:
-        write_status(tmp_path / "results" / f"{ip}_status.txt", ip, "SUCCESS", "")
+        write_status(tmp_path / "results" / r._run_id / f"{ip}_status.txt", ip, "SUCCESS", "")
     r.tick()  # 标记完成
     r.tick()  # 启动下一批
     assert launched == ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"]
@@ -121,7 +121,8 @@ def test_success_without_raw_file_becomes_fail(tmp_path: Path):
     servers = make_servers(1)
     cfg = make_cfg(tmp_path, concurrency=1)
     cfg.launcher = lambda runner, rec: write_status(
-        tmp_path / "results" / f"{rec.server.ip}_status.txt", rec.server.ip, "SUCCESS", ""
+        tmp_path / "results" / runner._run_id / f"{rec.server.ip}_status.txt",
+        rec.server.ip, "SUCCESS", "",
     )
     r = Runner(servers, cfg)
     r.start()
@@ -163,15 +164,15 @@ def test_stale_run_id_status_is_ignored(tmp_path: Path):
     r = Runner(servers, cfg)
     r.start()
     rid = r._run_id
-    write_status(tmp_path / "results" / "10.0.0.1_status.txt",
+    write_status(tmp_path / "results" / r._run_id / "10.0.0.1_status.txt",
                  "10.0.0.1", "SUCCESS", "在途", "stale-rid")
     r.tick()
     assert not r._records[0].done  # run_id 不匹配，忽略
-    write_status(tmp_path / "results" / "10.0.0.1_status.txt",
+    write_status(tmp_path / "results" / r._run_id / "10.0.0.1_status.txt",
                  "10.0.0.1", "SUCCESS", "", rid)
     # 补写原始输出文件：results() 对 SUCCESS 但缺 raw 的记录会降级为 FAIL（见
     # test_success_without_raw_file_becomes_fail），本测试聚焦 run_id 过滤不关心该降级
-    (tmp_path / "results" / "10.0.0.1_raw.txt").write_text("ok\n", encoding="utf-8")
+    (tmp_path / "results" / r._run_id / "10.0.0.1_raw.txt").write_text("ok\n", encoding="utf-8")
     assert run_until_done(r)
     assert r.results()[0].status == "SUCCESS"
 
@@ -192,6 +193,7 @@ def test_real_mode_launcher_writes_task_and_spawns_securecrt(tmp_path: Path):
         _default_launcher(r, rec)
     task = tmp_path / "task" / "10.0.0.1.txt"
     assert task.exists()
+    assert task.read_text(encoding="utf-8").splitlines()[6] == str(tmp_path / "results" / r._run_id / "10.0.0.1")
     assert task.read_text(encoding="utf-8").splitlines()[8] == r._run_id
     args = popen.call_args[0][0]
     assert args[0] == r"C:\fake\SecureCRT.exe"
@@ -200,3 +202,17 @@ def test_real_mode_launcher_writes_task_and_spawns_securecrt(tmp_path: Path):
     assert args[3] == "/ARG"
     assert args[4] == str(task)
     assert popen.call_args[1]["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def test_old_run_dir_files_are_ignored(tmp_path: Path):
+    servers = make_servers(1)
+    cfg = make_cfg(tmp_path, concurrency=1, per_deadline=300.0)
+    cfg.launcher = lambda runner, rec: None
+    r = Runner(servers, cfg)
+    r.start()
+    old = tmp_path / "results" / "oldrun"
+    old.mkdir(parents=True, exist_ok=True)
+    write_status(old / "10.0.0.1_status.txt", "10.0.0.1", "SUCCESS", "旧运行")
+    (old / "10.0.0.1_raw.txt").write_text("stale", encoding="utf-8")
+    r.tick()
+    assert not r._records[0].done  # 旧运行目录的文件对新运行无任何影响

@@ -15,7 +15,7 @@ SUMMARY_HEADERS = ["IP", "主机名", "状态", "失败原因", "告警总数"] 
 STATUS_CN = {"SUCCESS": "成功", "FAIL": "失败", "STOPPED": "已停止"}
 
 
-def write_workbook(path: Path, results: list[ServerResult]) -> None:
+def write_workbook(path: Path, results: list[ServerResult], sim_mode: bool = False) -> None:
     wb = Workbook()
 
     ws_detail = wb.active
@@ -39,6 +39,11 @@ def write_workbook(path: Path, results: list[ServerResult]) -> None:
         )
     _style_header(ws_summary)
     _auto_width(ws_summary)
+
+    if sim_mode:
+        ws_note = wb.create_sheet("说明")
+        ws_note.append(["注意：本文件为模拟数据（测试用），非真实设备结果。"])
+        ws_note.column_dimensions["A"].width = 60
 
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)

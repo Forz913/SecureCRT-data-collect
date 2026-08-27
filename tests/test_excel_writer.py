@@ -66,3 +66,18 @@ def test_all_level_counts_in_summary(tmp_path: Path):
     write_workbook(out, results)
     rows = list(load_workbook(out)["汇总"].values)
     assert rows[1][5:9] == (1, 1, 1, 1)
+
+
+def test_sim_mode_adds_note_sheet(tmp_path: Path):
+    out = tmp_path / "sim.xlsx"
+    write_workbook(out, [make_result("1.1.1.1", "SUCCESS", "", [])], sim_mode=True)
+    wb = load_workbook(out)
+    assert wb.sheetnames == ["明细", "汇总", "说明"]
+    assert "模拟数据" in wb["说明"].cell(1, 1).value
+
+
+def test_real_mode_has_no_note_sheet(tmp_path: Path):
+    out = tmp_path / "real.xlsx"
+    write_workbook(out, [make_result("1.1.1.1", "SUCCESS", "", [])], sim_mode=False)
+    wb = load_workbook(out)
+    assert wb.sheetnames == ["明细", "汇总"]

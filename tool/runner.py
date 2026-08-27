@@ -72,20 +72,24 @@ class _Record:
 
 class Runner:
     def __init__(self, servers: list[Server], cfg: RunConfig):
+        self._run_id = ""
         self.cfg = cfg
         self._records = [_Record(s, i) for i, s in enumerate(servers)]
         self._running = 0
         self._stopped = False
         self._launcher = cfg.launcher or _default_launcher
 
+    def _run_dir(self) -> Path:
+        return self.cfg.results_dir / self._run_id
+
     def _status_path(self, rec: _Record) -> Path:
-        return self.cfg.results_dir / f"{rec.server.ip}_status.txt"
+        return self._run_dir() / f"{rec.server.ip}_status.txt"
 
     def _raw_path(self, rec: _Record) -> Path:
-        return self.cfg.results_dir / f"{rec.server.ip}_raw.txt"
+        return self._run_dir() / f"{rec.server.ip}_raw.txt"
 
     def _result_prefix(self, rec: _Record) -> Path:
-        return self.cfg.results_dir / rec.server.ip
+        return self._run_dir() / rec.server.ip
 
     def _emit(self, event: str, ip: str, payload: str = "") -> None:
         if self.cfg.on_event:
@@ -95,12 +99,9 @@ class Runner:
         self._run_id = f"{time.time_ns()}"
         self.cfg.task_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.results_dir.mkdir(parents=True, exist_ok=True)
+        self._run_dir().mkdir(parents=True, exist_ok=True)
         if self.cfg.stop_flag_path.exists():
             self.cfg.stop_flag_path.unlink()
-        for rec in self._records:
-            for p in (self._status_path(rec), self._raw_path(rec)):
-                if p.exists():
-                    p.unlink()
         self._emit("log", "", "开始执行，共 {} 台".format(len(self._records)))
 
     def request_stop(self) -> None:
