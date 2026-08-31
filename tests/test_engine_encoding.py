@@ -8,7 +8,7 @@ def test_engine_vbs_decodes_as_gbk_and_contains_chinese():
     text = ENGINE.read_bytes().decode("gbk")
     assert "用户停止" in text
     assert "输出为空" in text
-    assert "输出捕获异常" in text
+    assert "指令执行超时" in text
 
 
 def test_engine_vbs_is_not_utf8():
