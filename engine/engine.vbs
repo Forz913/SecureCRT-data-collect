@@ -5,7 +5,8 @@
 ' 输出: <前缀>_raw.txt（原始屏幕输出）、<前缀>_status.txt（IP<TAB>状态<TAB>原因<TAB>run_id）
 ' 状态: SUCCESS / FAIL / STOPPED
 ' 注意: 不使用 crt.Quit —— SecureCRT 单实例，Quit 会关掉用户自己的窗口
-' 提示符为华为 VRP 用户视图 <主机名>（字面量，取自任务文件主机名字段）
+' 提示符识别: 候选 <主机名>（用户视图）/ [主机名]（系统视图）/ 裸提示符 主机名>（实测形态），分页标记 ---- More ---- 兜底
+'            按行坐标取屏拼接；不再依赖字面量提示符匹配（原"输出捕获异常/捕获不完整"判定已移除）
 Option Explicit
 
 Dim g_fso
@@ -51,7 +52,7 @@ Sub Main()
     Dim taskPath, content, lines
     Dim ip, hostname, user, passwd
     Dim timeoutSec, command, prefix, stopFlagPath, runId
-    Dim n, rawOut
+    Dim n, rawOut, nStart, nEnd, nRow, dDeadline, bDone, chk
 
     If crt.Arguments.Count < 1 Then
         Exit Sub
@@ -93,45 +94,74 @@ Sub Main()
         Exit Sub
     End If
 
-    n = crt.Screen.WaitForString("<", 30)
-    If Not n Then
-        WriteStatus prefix, ip, "FAIL", "连接后30秒未出现命令提示符(连接失败/认证失败/不可达)", runId
+    ' 提示符候选：<主机名>（用户视图）/ [主机名]（系统视图）/ 主机名>（裸提示符，实测形态）/ 分页标记
+    Dim arrWait(3)
+    arrWait(0) = "<" & hostname & ">"
+    arrWait(1) = "[" & hostname & "]"
+    arrWait(2) = hostname & ">"
+    arrWait(3) = "---- More ----"
+
+    n = crt.Screen.WaitForStrings(arrWait, 30, True)
+    If n = 0 Then
+        WriteStatus prefix, ip, "FAIL", "连接后30秒未出现命令提示符(连接失败/认证失败/不可达/清单主机名与实际提示符不符)", runId
         DisconnectQuietly
         Exit Sub
     End If
 
     crt.Screen.Send "screen-length 0 temporary" & vbCr
-    n = crt.Screen.WaitForString("<", 15)
-    If Not n Then
+    n = crt.Screen.WaitForStrings(arrWait, 15, True)
+    If n = 0 Then
         WriteStatus prefix, ip, "FAIL", "关闭分页后未回到命令提示符", runId
         DisconnectQuietly
         Exit Sub
     End If
 
     crt.Screen.Send command & vbCr
-    ' 字面量提示符 <主机名>（取任务文件主机名字段），避免输出中的 <> 内容提前截断捕获
-    rawOut = crt.Screen.ReadString("<" & hostname & ">", timeoutSec)
-
-    If rawOut = "" Then
-        n = crt.Screen.WaitForString("<" & hostname & ">", 2)
-        If n Then
-            WriteStatus prefix, ip, "FAIL", "输出捕获异常(提示符与清单主机名可能不符)", runId
-        Else
-            WriteStatus prefix, ip, "FAIL", "指令执行超时(" & timeoutSec & "秒)", runId
-        End If
+    ' 等待命令回显结束：匹配"指令+换行"（字面量，不含提示符），避免裸提示符形态命中回显行
+    If Not crt.Screen.WaitForString(command & vbCr, 10) Then
+        WriteStatus prefix, ip, "FAIL", "未检测到命令回显", runId
         DisconnectQuietly
         Exit Sub
     End If
+
+    nStart = crt.Screen.CurrentRow
+    bDone = False
+    dDeadline = Timer + timeoutSec
+
+    Do
+        n = crt.Screen.WaitForStrings(arrWait, 10, True)
+        If n = 1 Or n = 2 Or n = 3 Then
+            bDone = True
+            Exit Do
+        End If
+        If n = 4 Then
+            crt.Screen.Send " "
+        End If
+        If Timer > dDeadline Then
+            Exit Do
+        End If
+    Loop
+
+    ' 按行取屏（Screen.Get 不含行尾换行，逐行拼接）
+    nEnd = crt.Screen.CurrentRow
+    rawOut = ""
+    For nRow = nStart To nEnd
+        rawOut = rawOut & crt.Screen.Get(nRow, 1, nRow, 255) & vbCrLf
+    Next
 
     WriteFileUtf8 prefix & "_raw.txt", rawOut
 
-    If InStr(rawOut, "<" & hostname & ">") = 0 Then
-        WriteStatus prefix, ip, "FAIL", "捕获不完整(输出中未包含命令提示符)", runId
+    If Not bDone Then
+        WriteStatus prefix, ip, "FAIL", "指令执行超时(输出未在" & timeoutSec & "秒内结束，已保留屏幕现存内容供排查)", runId
         DisconnectQuietly
         Exit Sub
     End If
 
-    If Len(Trim(Replace(rawOut, command, ""))) < 10 Then
+    ' 空输出检查：去掉提示符行后剩余内容过短视为无输出
+    chk = Replace(rawOut, "<" & hostname & ">", "")
+    chk = Replace(chk, "[" & hostname & "]", "")
+    chk = Replace(chk, hostname & ">", "")
+    If Len(Trim(chk)) < 10 Then
         WriteStatus prefix, ip, "FAIL", "输出为空", runId
         DisconnectQuietly
         Exit Sub
