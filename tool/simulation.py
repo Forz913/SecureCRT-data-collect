@@ -1,10 +1,10 @@
-"""模拟模式：按服务器序号映射样例输出，直接写结果文件（不走 SecureCRT）。"""
+"""模拟模式：按服务器序号映射样例输出（不走网络）。"""
 from __future__ import annotations
 
 from pathlib import Path
 
 from tool.paths import resource_path
-from tool.taskfiles import Server, write_status
+from tool.taskfiles import Server
 
 SAMPLES = [
     "sample_1_normal.txt",
@@ -14,13 +14,9 @@ SAMPLES = [
 ]
 
 
-def simulate_server(server: Server, index: int, status_path: Path, raw_path: Path, run_id: str = "") -> None:
-    """index % 5 == 4 映射为失败样例，其余映射为成功样例。"""
-    status_path.parent.mkdir(parents=True, exist_ok=True)
+def simulate_server(server: Server, index: int) -> tuple[str, str, str]:
+    """返回 (raw_text, status, reason)；index % 5 == 4 映射为失败样例。"""
     if index % 5 == 4:
-        raw_path.write_text("<host>\r\n", encoding="utf-8")
-        write_status(status_path, server.ip, "FAIL", "输出为空(模拟)", run_id)
-        return
+        return "<host>\r\n", "FAIL", "输出为空(模拟)"
     sample = Path(resource_path("samples")) / SAMPLES[index % 4]
-    raw_path.write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
-    write_status(status_path, server.ip, "SUCCESS", "", run_id)
+    return sample.read_text(encoding="utf-8"), "SUCCESS", ""

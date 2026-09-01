@@ -1,21 +1,15 @@
-"""并发调度器：按并发数分批启动取数引擎，轮询状态文件汇总结果。
-
-完成判定以各台状态文件为准（SecureCRT 单实例复用导致进程退出不代表任务完成）。
-"""
+"""并发调度器（线程版）：每台服务器一个采集线程，事件经队列回传，tick() 排空。"""
 from __future__ import annotations
 
-import subprocess
+import queue
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from tool.taskfiles import (
-    Server,
-    ServerResult,
-    read_status,
-    write_status,
-    write_task_file,
-)
+from tool.ssh_collect import CollectResult
+from tool.taskfiles import Server, ServerResult
+
 
 @dataclass
 class RunConfig:
@@ -23,161 +17,129 @@ class RunConfig:
     timeout: int
     concurrency: int
     sim_mode: bool
-    securecrt_path: str
-    engine_path: str
-    task_dir: Path
     results_dir: Path
-    stop_flag_path: Path
-    per_deadline: float  # 每台从启动到完成的最长秒数
     on_event: object = None  # (event, ip, payload) -> None
-    launcher: object = None  # 测试注入用: (runner, rec) -> None
+    collector: object = None  # 测试注入: (server, index, cfg, is_stopped) -> CollectResult
 
 
-def _default_launcher(runner, rec) -> None:
-    if runner.cfg.sim_mode:
+def _default_collector(server: Server, index: int, cfg: RunConfig, is_stopped) -> CollectResult:
+    if cfg.sim_mode:
         from tool.simulation import simulate_server
 
-        simulate_server(
-            rec.server, rec.index, runner._status_path(rec), runner._raw_path(rec),
-            run_id=runner._run_id,
-        )
-    else:
-        task_path = runner.cfg.task_dir / f"{rec.server.ip}.txt"
-        write_task_file(
-            task_path,
-            rec.server,
-            runner.cfg.command,
-            runner.cfg.timeout,
-            result_prefix=str(runner._result_prefix(rec)),
-            stop_flag_path=str(runner.cfg.stop_flag_path),
-            run_id=runner._run_id,
-        )
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            [runner.cfg.securecrt_path, "/SCRIPT", runner.cfg.engine_path, "/ARG", str(task_path)],
-            creationflags=flags,
-        )
-        # 不等待进程：完成以状态文件为准
+        raw, status, reason = simulate_server(server, index)
+        return CollectResult(status, reason, raw)
+    from tool.ssh_collect import collect_from_server
+
+    return collect_from_server(
+        server.ip, server.username, server.password, server.hostname,
+        cfg.command, cfg.timeout, is_stopped,
+    )
 
 
 class _Record:
     def __init__(self, server: Server, index: int):
         self.server = server
         self.index = index
-        self.launch_time: float | None = None
         self.done = False
         self.status = "FAIL"
         self.reason = ""
+        self.output = ""
+        self.raw_path: Path | None = None
 
 
 class Runner:
     def __init__(self, servers: list[Server], cfg: RunConfig):
-        self._run_id = ""
         self.cfg = cfg
         self._records = [_Record(s, i) for i, s in enumerate(servers)]
-        self._running = 0
-        self._stopped = False
-        self._launcher = cfg.launcher or _default_launcher
+        self._queue: queue.Queue = queue.Queue()
+        self._stop = threading.Event()
+        self._next = 0
+        self._active = 0
+        self._collector = cfg.collector or _default_collector
+        self._run_id = ""
 
     def _run_dir(self) -> Path:
         return self.cfg.results_dir / self._run_id
 
-    def _status_path(self, rec: _Record) -> Path:
-        return self._run_dir() / f"{rec.server.ip}_status.txt"
-
-    def _raw_path(self, rec: _Record) -> Path:
-        return self._run_dir() / f"{rec.server.ip}_raw.txt"
-
-    def _result_prefix(self, rec: _Record) -> Path:
-        return self._run_dir() / rec.server.ip
-
-    def _emit(self, event: str, ip: str, payload: str = "") -> None:
-        if self.cfg.on_event:
-            self.cfg.on_event(event, ip, payload)
-
     def start(self) -> None:
         self._run_id = f"{time.time_ns()}"
-        self.cfg.task_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.results_dir.mkdir(parents=True, exist_ok=True)
         self._run_dir().mkdir(parents=True, exist_ok=True)
-        if self.cfg.stop_flag_path.exists():
-            self.cfg.stop_flag_path.unlink()
         self._emit("log", "", "开始执行，共 {} 台".format(len(self._records)))
+        self._launch_next_batch()
 
-    def request_stop(self) -> None:
-        self._stopped = True
-        self.cfg.stop_flag_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cfg.stop_flag_path.write_text("stop", encoding="utf-8")
-        self._emit("log", "", "收到停止请求：未开始的机器将记为已停止")
+    def _launch_next_batch(self) -> None:
+        while (
+            self._next < len(self._records)
+            and self._active < self.cfg.concurrency
+            and not self._stop.is_set()
+        ):
+            rec = self._records[self._next]
+            self._next += 1
+            self._active += 1
+            self._emit("log", rec.server.ip, "启动取数")
+            threading.Thread(target=self._worker, args=(rec,), daemon=True).start()
+
+    def _worker(self, rec: _Record) -> None:
+        try:
+            result = self._collector(rec.server, rec.index, self.cfg, self._stop.is_set)
+        except Exception as e:
+            result = CollectResult("FAIL", f"采集异常: {e}", "")
+        rec.status, rec.reason, rec.output = result.status, result.reason, result.output
+        if rec.output.strip():
+            raw = self._run_dir() / f"{rec.server.ip}_raw.txt"
+            try:
+                raw.write_text(rec.output, encoding="utf-8")
+                rec.raw_path = raw
+            except OSError:
+                pass
+        self._queue.put(rec)
 
     def tick(self) -> bool:
-        """推进一步调度。全部完成返回 True。"""
-        now = time.monotonic()
-        for rec in self._records:
-            if rec.done:
-                continue
-            st = read_status(self._status_path(rec))
-            if st is not None:
-                status, reason, rid = st
-                if rid and rid != self._run_id:
-                    continue  # 上一轮运行遗留引擎的迟到状态，忽略
-                rec.status, rec.reason = status, reason
-                rec.done = True
-                if rec.launch_time is not None:
-                    self._running -= 1
-                self._emit("status", rec.server.ip, rec.status)
-                continue
-            if rec.launch_time is not None and now - rec.launch_time > self.cfg.per_deadline:
-                rec.status, rec.reason = "FAIL", "超时未返回"
-                rec.done = True
-                self._running -= 1
-                self._emit("status", rec.server.ip, "FAIL")
-                continue
-            if rec.launch_time is None and not self._stopped and self._running < self.cfg.concurrency:
-                rec.launch_time = now
-                self._running += 1
-                self._emit("log", rec.server.ip, "启动取数")
-                try:
-                    self._launcher(self, rec)
-                except Exception as e:
-                    # 启动异常不中断整个批次：记为失败，由状态轮询收敛
-                    write_status(self._status_path(rec), rec.server.ip, "FAIL", f"启动失败: {e}")
-                continue
-            if rec.launch_time is None and self._stopped:
-                rec.status, rec.reason = "STOPPED", "用户停止"
-                rec.done = True
-                self._emit("status", rec.server.ip, "STOPPED")
-        if all(rec.done for rec in self._records):
-            self._cleanup()
-            return True
-        return False
+        """排空完成事件并推进调度。全部完成返回 True。"""
+        got = False
+        while True:
+            try:
+                rec = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            got = True
+            self._active -= 1
+            rec.done = True
+            self._emit("status", rec.server.ip, rec.status)
+        if got:
+            self._launch_next_batch()
+        if self._stop.is_set():
+            for rec in self._records[self._next:]:
+                if not rec.done:
+                    rec.status, rec.reason = "STOPPED", "用户停止"
+                    rec.done = True
+                    self._emit("status", rec.server.ip, "STOPPED")
+            self._next = len(self._records)
+        return all(rec.done for rec in self._records)
 
-    def _cleanup(self) -> None:
-        if self.cfg.stop_flag_path.exists():
-            self.cfg.stop_flag_path.unlink()
-        for rec in self._records:
-            p = self.cfg.task_dir / f"{rec.server.ip}.txt"
-            if p.exists():
-                p.unlink()
+    def request_stop(self) -> None:
+        self._stop.set()
+        self._emit("log", "", "收到停止请求：未开始的机器将记为已停止")
+
+    def progress(self) -> float:
+        total = max(len(self._records), 1)
+        return sum(1 for rec in self._records if rec.done) / total
 
     def results(self) -> list[ServerResult]:
         out: list[ServerResult] = []
         for rec in self._records:
-            raw_path = self._raw_path(rec)
-            if rec.status == "SUCCESS" and not raw_path.exists():
-                rec.status, rec.reason = "FAIL", "原始输出文件缺失"
             out.append(
                 ServerResult(
                     ip=rec.server.ip,
                     hostname=rec.server.hostname,
                     status=rec.status,
                     reason=rec.reason,
-                    raw_path=raw_path if raw_path.exists() else None,
+                    raw_path=rec.raw_path,
                 )
             )
         return out
 
-    def progress(self) -> float:
-        """完成比例 0.0-1.0。"""
-        total = max(len(self._records), 1)
-        return sum(1 for rec in self._records if rec.done) / total
+    def _emit(self, event: str, ip: str, payload: str = "") -> None:
+        if self.cfg.on_event:
+            self.cfg.on_event(event, ip, payload)
