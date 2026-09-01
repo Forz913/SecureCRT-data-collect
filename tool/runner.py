@@ -1,4 +1,11 @@
-"""并发调度器（线程版）：每台服务器一个采集线程，事件经队列回传，tick() 排空。"""
+"""并发调度器（线程版）：每台服务器一个采集线程，事件经队列回传。
+
+线程契约（UI 侧必须遵守）：
+- start()/tick()/request_stop() 只能由同一线程（UI 线程）调用，不可并发；
+- tick() 负责排空队列并推进调度，UI 需周期调用（如 after(400)）；
+- results()/progress() 应在 tick() 返回 True（全部完成）后调用，此时所有记录已通过队列完成内存同步；
+- worker 线程只写自身记录并 put 队列，不触碰调度状态（_next/_active）。
+"""
 from __future__ import annotations
 
 import queue
@@ -98,6 +105,7 @@ class Runner:
         except Exception:
             rec.status, rec.reason = "FAIL", "采集异常: 结果处理失败"
         finally:
+            # 注：BaseException（如 KeyboardInterrupt）会绕过此处，属进程级终止，可接受
             self._queue.put(rec)
 
     def tick(self) -> bool:

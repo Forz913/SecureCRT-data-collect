@@ -65,8 +65,12 @@ def test_concurrency_limit_respected(tmp_path: Path):
     cfg = make_cfg(tmp_path, concurrency=2, sim_mode=False, collector=collector)
     r = Runner(make_servers(5), cfg)
     r.start()
-    time.sleep(0.2)
-    r.tick()
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        with lock:
+            if len(active) == 2:
+                break
+        time.sleep(0.01)
     with lock:
         assert len(active) == 2  # 首批最多并发数台，且前两台未完成不再启动新的
     gate.set()
