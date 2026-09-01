@@ -7,7 +7,6 @@ from tool.taskfiles import Server
 def test_roundtrip(tmp_path: Path):
     p = tmp_path / "config.json"
     cfg = AppConfig(
-        securecrt_path=r"C:\X\SecureCRT.exe",
         excel_path=r"C:\Y\out.xlsx",
         servers=[Server("1.1.1.1", "h1", "u1", "p1!")],
         command="disp alarm hardware",
@@ -18,6 +17,17 @@ def test_roundtrip(tmp_path: Path):
     save(p, cfg)
     loaded = load(p)
     assert loaded == cfg
+
+
+def test_load_old_config_with_securecrt_path_is_tolerated(tmp_path: Path):
+    p = tmp_path / "config.json"
+    p.write_text(
+        '{"securecrt_path": "C:\\\\X\\\\SecureCRT.exe", "command": "disp ver"}',
+        encoding="utf-8",
+    )
+    cfg = load(p)
+    assert cfg.command == "disp ver"
+    assert cfg.timeout == 60  # 未知/已删字段不影响其余默认值
 
 
 def test_load_missing_file_returns_defaults(tmp_path: Path):

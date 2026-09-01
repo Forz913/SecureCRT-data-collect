@@ -9,7 +9,6 @@ from tool.taskfiles import Server
 
 @dataclass
 class AppConfig:
-    securecrt_path: str = ""
     excel_path: str = ""
     servers: list[Server] = field(default_factory=list)
     command: str = "disp alarm hardware"
@@ -51,7 +50,6 @@ def load(path: Path) -> AppConfig:
     if not isinstance(data, dict):
         return AppConfig()
     cfg = AppConfig()
-    cfg.securecrt_path = _get_str(data, "securecrt_path", cfg.securecrt_path)
     cfg.excel_path = _get_str(data, "excel_path", cfg.excel_path)
     cfg.command = _get_str(data, "command", cfg.command)
     cfg.timeout = _get_int(data, "timeout", cfg.timeout)
