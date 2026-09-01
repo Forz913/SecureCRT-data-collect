@@ -119,3 +119,16 @@ def test_results_preserve_order(tmp_path: Path):
     r.start()
     assert run_until_done(r)
     assert [x.ip for x in r.results()] == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+
+
+def test_collector_returning_none_degrades_to_fail(tmp_path: Path):
+    def collector(server, index, cfg, is_stopped):
+        return None  # 违反契约的采集器
+
+    cfg = make_cfg(tmp_path, concurrency=1, sim_mode=False, collector=collector)
+    r = Runner(make_servers(1), cfg)
+    r.start()
+    assert run_until_done(r)  # 不再卡死
+    results = r.results()
+    assert results[0].status == "FAIL"
+    assert "采集异常" in results[0].reason

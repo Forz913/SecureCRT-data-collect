@@ -81,19 +81,24 @@ class Runner:
             threading.Thread(target=self._worker, args=(rec,), daemon=True).start()
 
     def _worker(self, rec: _Record) -> None:
+        result = CollectResult("FAIL", "采集异常: 未知错误", "")
         try:
-            result = self._collector(rec.server, rec.index, self.cfg, self._stop.is_set)
-        except Exception as e:
-            result = CollectResult("FAIL", f"采集异常: {e}", "")
-        rec.status, rec.reason, rec.output = result.status, result.reason, result.output
-        if rec.output.strip():
-            raw = self._run_dir() / f"{rec.server.ip}_raw.txt"
             try:
-                raw.write_text(rec.output, encoding="utf-8")
-                rec.raw_path = raw
-            except OSError:
-                pass
-        self._queue.put(rec)
+                result = self._collector(rec.server, rec.index, self.cfg, self._stop.is_set)
+            except Exception as e:
+                result = CollectResult("FAIL", f"采集异常: {e}", "")
+            rec.status, rec.reason, rec.output = result.status, result.reason, result.output
+            if rec.output.strip():
+                raw = self._run_dir() / f"{rec.server.ip}_raw.txt"
+                try:
+                    raw.write_text(rec.output, encoding="utf-8")
+                    rec.raw_path = raw
+                except OSError:
+                    pass
+        except Exception:
+            rec.status, rec.reason = "FAIL", "采集异常: 结果处理失败"
+        finally:
+            self._queue.put(rec)
 
     def tick(self) -> bool:
         """排空完成事件并推进调度。全部完成返回 True。"""
