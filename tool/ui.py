@@ -39,7 +39,7 @@ class MainWindow:
         body = ttk.Frame(self.root, padding=8)
         body.pack(fill="both", expand=True)
 
-        # 2. Excel 保存位置
+        # 1. Excel 保存位置
         row1 = ttk.Frame(body)
         row1.pack(fill="x", **pad)
         ttk.Label(row1, text="保存到:").pack(side="left")
@@ -47,7 +47,7 @@ class MainWindow:
         ttk.Entry(row1, textvariable=self.excel_var).pack(side="left", fill="x", expand=True, padx=4)
         ttk.Button(row1, text="浏览...", command=self._browse_excel).pack(side="left")
 
-        # 3. 指令 + 超时
+        # 2. 指令 + 超时
         row2 = ttk.Frame(body)
         row2.pack(fill="x", **pad)
         ttk.Label(row2, text="查询指令:").pack(side="left")
@@ -57,7 +57,7 @@ class MainWindow:
         self.timeout_var = tk.IntVar(value=60)
         ttk.Spinbox(row2, from_=10, to=600, textvariable=self.timeout_var, width=6).pack(side="left", padx=4)
 
-        # 4. 并发 + 模拟模式
+        # 3. 并发 + 模拟模式
         row3 = ttk.Frame(body)
         row3.pack(fill="x", **pad)
         ttk.Label(row3, text="并发数:").pack(side="left")
@@ -66,7 +66,7 @@ class MainWindow:
         self.sim_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(row3, text="模拟取数（测试用，不连真实服务器）", variable=self.sim_var).pack(side="left", padx=12)
 
-        # 5. 服务器清单
+        # 4. 服务器清单
         row4 = ttk.Frame(body)
         row4.pack(fill="x", **pad)
         ttk.Label(row4, text="服务器清单:").pack(side="left")
@@ -89,7 +89,7 @@ class MainWindow:
         ysb.pack(side="right", fill="y")
         self.server_tree.bind("<Double-1>", self._edit_server)
 
-        # 6. 运行控制
+        # 5. 运行控制
         row6 = ttk.Frame(body)
         row6.pack(fill="x", **pad)
         self.start_btn = ttk.Button(row6, text="开始", command=self._on_start)
@@ -99,7 +99,7 @@ class MainWindow:
         self.progress = ttk.Progressbar(row6, maximum=100)
         self.progress.pack(side="left", fill="x", expand=True, padx=8)
 
-        # 7. 状态列表 + 日志
+        # 6. 状态列表 + 日志
         status_frame = ttk.Frame(body)
         status_frame.pack(fill="x", **pad)
         self.status_tree = ttk.Treeview(status_frame, columns=("ip", "hostname", "status"), show="headings", height=5)
@@ -270,7 +270,15 @@ class MainWindow:
         self._reset_status_ui()
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.runner.start()
+        try:
+            self.runner.start()
+        except OSError as e:
+            messagebox.showerror("错误", f"无法创建结果目录：{e}")
+            self._log(f"启动失败：{e}")
+            self.start_btn.config(state="normal")
+            self.stop_btn.config(state="disabled")
+            self.runner = None
+            return
         self.root.after(self.POLL_MS, self._tick)
 
     def _on_stop(self) -> None:
@@ -289,7 +297,11 @@ class MainWindow:
         results = self.runner.results()
         for r in results:
             if r.status == "SUCCESS":
-                r.alarms = parse_output(read_raw(r.raw_path))
+                if r.raw_path:
+                    r.alarms = parse_output(read_raw(r.raw_path))
+                else:
+                    r.status = "FAIL"
+                    r.reason = "原始输出文件缺失"
         try:
             write_workbook(Path(self.cfg.excel_path), results, sim_mode=self.cfg.sim_mode)
         except Exception as e:
