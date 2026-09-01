@@ -270,7 +270,7 @@ class CollectResult:
 def prompt_re(hostname: str) -> re.Pattern:
     """提示符三形态整行匹配：<h> / [h] / 裸 h>。"""
     h = re.escape(hostname)
-    return re.compile(rf"^(?:<{h}>|\[{h}\]|{h}>)\s*$")
+    return re.compile(rf"^\s*(?:<{h}>|\[{h}\]|{h}>)\s*$")
 
 
 class ChannelReader:
@@ -330,7 +330,7 @@ def collect_output(
             return CollectResult(
                 "FAIL", f"指令执行超时({timeout_s}秒，已保留已收内容)", output
             )
-        if sum(len(line.strip()) for line in lines) < 10:
+        if sum(len(line.strip()) for line in lines) < 1:
             return CollectResult("FAIL", "输出为空", output)
         return CollectResult("SUCCESS", "", output)
     except StoppedError:
