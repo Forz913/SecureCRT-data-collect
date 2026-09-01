@@ -8,9 +8,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from tool.config import AppConfig, load as cfg_load, save as cfg_save
 from tool.excel_writer import write_workbook
-from tool.locate import find_securecrt
 from tool.parser import parse_output
-from tool.paths import app_dir, resource_path
+from tool.paths import app_dir
 from tool.runner import RunConfig, Runner
 from tool.taskfiles import Server, is_valid_ip, parse_server_line, read_raw
 
@@ -39,15 +38,6 @@ class MainWindow:
         pad = {"padx": 6, "pady": 3}
         body = ttk.Frame(self.root, padding=8)
         body.pack(fill="both", expand=True)
-
-        # 1. SecureCRT 路径
-        row0 = ttk.Frame(body)
-        row0.pack(fill="x", **pad)
-        ttk.Label(row0, text="SecureCRT:").pack(side="left")
-        self.securecrt_var = tk.StringVar()
-        ttk.Entry(row0, textvariable=self.securecrt_var).pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(row0, text="浏览...", command=self._browse_securecrt).pack(side="left", padx=2)
-        ttk.Button(row0, text="自动检测", command=self._auto_detect_securecrt).pack(side="left")
 
         # 2. Excel 保存位置
         row1 = ttk.Frame(body)
@@ -231,22 +221,6 @@ class MainWindow:
             self.cfg.servers.clear()
             self._refresh_server_tree()
 
-    # ---------- 路径选择 ----------
-
-    def _browse_securecrt(self) -> None:
-        path = filedialog.askopenfilename(title="选择 SecureCRT.exe",
-                                          filetypes=[("SecureCRT", "SecureCRT.exe"), ("所有文件", "*.*")])
-        if path:
-            self.securecrt_var.set(path)
-
-    def _auto_detect_securecrt(self) -> None:
-        found = find_securecrt()
-        if found:
-            self.securecrt_var.set(found)
-            self._log(f"检测到 SecureCRT: {found}")
-        else:
-            messagebox.showinfo("提示", "未自动检测到 SecureCRT，请手动指定")
-
     def _browse_excel(self) -> None:
         initial = self.excel_var.get() or default_excel_name()
         path = filedialog.asksaveasfilename(
@@ -271,9 +245,6 @@ class MainWindow:
             return "查询指令为空"
         if not self.cfg.excel_path.strip():
             return "请指定 Excel 保存位置"
-        if not self.cfg.sim_mode:
-            if not self.cfg.securecrt_path.strip() or not Path(self.cfg.securecrt_path).exists():
-                return "SecureCRT.exe 路径无效（模拟模式下不需要）"
         return ""
 
     def _on_start(self) -> None:
@@ -285,8 +256,6 @@ class MainWindow:
         if Path(self.cfg.excel_path).exists():
             if not messagebox.askyesno("确认", f"文件已存在，是否覆盖？\n{self.cfg.excel_path}"):
                 return
-        if not self.cfg.sim_mode:
-            self._log("提示：运行期间会弹出 SecureCRT 窗口，请勿手动操作这些窗口")
         self._save_config()
         work = app_dir()
         run_cfg = RunConfig(
@@ -294,12 +263,7 @@ class MainWindow:
             timeout=self.cfg.timeout,
             concurrency=self.cfg.concurrency,
             sim_mode=self.cfg.sim_mode,
-            securecrt_path=self.cfg.securecrt_path,
-            engine_path=resource_path("engine/engine.vbs"),
-            task_dir=work / "task",
             results_dir=work / "results",
-            stop_flag_path=work / "stop.flag",
-            per_deadline=self.cfg.timeout + 150,
             on_event=self._on_event,
         )
         self.runner = Runner(list(self.cfg.servers), run_cfg)
@@ -386,11 +350,9 @@ class MainWindow:
             self.cfg.concurrency = 5
         self.cfg.concurrency = max(1, min(10, self.cfg.concurrency))
         self.cfg.sim_mode = bool(self.sim_var.get())
-        self.cfg.securecrt_path = self.securecrt_var.get().strip()
         self.cfg.excel_path = self.excel_var.get().strip()
 
     def _load_from_config(self) -> None:
-        self.securecrt_var.set(self.cfg.securecrt_path or find_securecrt())
         self.excel_var.set(self.cfg.excel_path or str(app_dir() / default_excel_name()))
         self.command_var.set(self.cfg.command)
         self.timeout_var.set(self.cfg.timeout)
@@ -408,13 +370,7 @@ class MainWindow:
         if self.runner:
             if not messagebox.askyesno("确认", "任务正在运行，确定退出？"):
                 return
-            # 停止未开始的机器并清理含明文密码的任务文件
             self.runner.request_stop()
-            for p in self.runner.cfg.task_dir.glob("*.txt"):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
         self._sync_config_from_ui()
         self._save_config()
         self.root.destroy()
