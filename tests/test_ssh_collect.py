@@ -1,4 +1,9 @@
+import socket
+
+import pytest
+
 from tool.ssh_collect import (
+    ChannelReader,
     CollectResult,
     ConnectionClosed,
     collect_output,
@@ -109,3 +114,54 @@ def test_connection_closed_maps_to_fail():
                             "cmd", 30, lambda: False)
     assert result.status == "FAIL"
     assert "连接被远端关闭" in result.reason
+
+
+class FakeChan:
+    """伪造 paramiko channel：按脚本吐字节块，耗尽后模拟 socket 超时。"""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.timeout = None
+
+    def settimeout(self, t):
+        self.timeout = t
+
+    def recv(self, n):
+        if self._chunks:
+            return self._chunks.pop(0)
+        raise socket.timeout
+
+
+def test_channel_reader_assembles_lines_across_chunks():
+    r = ChannelReader(FakeChan([b"hel", b"lo\r\nwor", b"ld\r\n"]))
+    assert r.read_line(1.0) == "hello"
+    assert r.read_line(1.0) == "world"
+
+
+def test_channel_reader_strips_crlf():
+    r = ChannelReader(FakeChan([b"a\r\n"]))
+    assert r.read_line(1.0) == "a"
+
+
+def test_channel_reader_replaces_bad_utf8():
+    r = ChannelReader(FakeChan([b"\xff\xfe\r\n"]))
+    line = r.read_line(1.0)
+    assert line is not None
+    assert "\r" not in line
+
+
+def test_channel_reader_raises_connection_closed_on_eof():
+    class EofChan(FakeChan):
+        def recv(self, n):
+            return b""
+
+    r = ChannelReader(EofChan([]))
+    with pytest.raises(ConnectionClosed):
+        r.read_line(1.0)
+
+
+def test_screen_length_timeout_branch():
+    # 初始提示符出现，关分页后不再出现提示符
+    result, _ = run(["GDHEY-TEST>"], screen_timeout=0.1)
+    assert result.status == "FAIL"
+    assert "关闭分页后未回到命令提示符" in result.reason
