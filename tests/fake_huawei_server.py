@@ -66,7 +66,7 @@ class FakeServer:
         if chan is None:
             transport.close()
             return
-        chan.send(f"Welcome banner\r\n{self.prompt}\r\n".encode("utf-8"))
+        chan.send(f"Welcome banner\r\n{self.prompt}".encode("utf-8"))
         buf = b""
         while True:
             try:
@@ -80,12 +80,15 @@ class FakeServer:
                 line, buf = buf.split(b"\n", 1)
                 cmd = line.strip().decode("utf-8", errors="replace")
                 if cmd == "screen-length 0 temporary":
-                    chan.send(f"\r\n{self.prompt}\r\n".encode("utf-8"))
+                    chan.send(f"\r\n{self.prompt}".encode("utf-8"))
+                    continue
+                if not cmd:
+                    # 用户按空格翻页：真机不重复打印提示符，仅继续输出
                     continue
                 resp = self.responses.get(cmd, "")
                 if resp:
-                    chan.send(resp.encode("utf-8"))
-                chan.send(f"\r\n{self.prompt}\r\n".encode("utf-8"))
+                    chan.send((resp + "\r\n").encode("utf-8"))
+                chan.send(self.prompt.encode("utf-8"))
         transport.close()
 
     def close(self):

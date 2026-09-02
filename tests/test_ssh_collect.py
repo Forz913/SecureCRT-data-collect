@@ -8,6 +8,7 @@ from tool.ssh_collect import (
     ConnectionClosed,
     collect_output,
     prompt_re,
+    prompt_tail_re,
 )
 
 
@@ -21,6 +22,12 @@ class FakeReader:
         if self._lines:
             return self._lines.pop(0)
         return None
+
+    def tail_prompt(self, re_prompt):
+        return False
+
+    def clear(self):
+        pass
 
 
 class FakeSender:
@@ -165,3 +172,43 @@ def test_screen_length_timeout_branch():
     result, _ = run(["GDHEY-TEST>"], screen_timeout=0.1)
     assert result.status == "FAIL"
     assert "关闭分页后未回到命令提示符" in result.reason
+
+
+def test_prompt_tail_re_matches_buffer_without_newline():
+    re_tail = prompt_tail_re("GDHEY-TEST")
+    assert re_tail.search("some banner\nGDHEY-TEST>") is not None
+    assert re_tail.search("GDHEY-TEST>\r") is not None
+    assert re_tail.search("xGDHEY-TEST>") is None  # 非行首
+    assert re_tail.search("GDHEY-TEST> ") is not None
+    assert re_tail.search("partial") is None
+
+
+def test_prompt_re_is_case_insensitive():
+    assert prompt_re("GDHEY-TEST").match("gdhey-test>")
+
+
+def test_channel_reader_tail_prompt_and_clear():
+    class ChunkChan:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def settimeout(self, t):
+            pass
+
+        def recv(self, n):
+            if self._chunks:
+                return self._chunks.pop(0)
+            raise socket.timeout
+
+    r = ChannelReader(ChunkChan([b"banner\r\nGDHEY-TEST>"]))
+    assert r.read_line(0.1) == "banner"
+    assert r.tail_prompt(prompt_tail_re("GDHEY-TEST"))
+    r.clear()
+    assert not r.tail_prompt(prompt_tail_re("GDHEY-TEST"))
+
+
+def test_initial_timeout_preserves_seen_content():
+    # 提示符超时失败时，output 携带已收到的横幅内容（供落盘排障）
+    result, _ = run(["Welcome banner", "second line"], prompt_timeout=0.1)
+    assert result.status == "FAIL"
+    assert result.output == "Welcome banner\nsecond line"

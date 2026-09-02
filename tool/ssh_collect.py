@@ -27,7 +27,13 @@ class CollectResult:
 def prompt_re(hostname: str) -> re.Pattern:
     """提示符三形态整行匹配：<h> / [h] / 裸 h>。"""
     h = re.escape(hostname)
-    return re.compile(rf"^\s*(?:<{h}>|\[{h}\]|{h}>)\s*$")
+    return re.compile(rf"^\s*(?:<{h}>|\[{h}\]|{h}>)\s*$", re.IGNORECASE)
+
+
+def prompt_tail_re(hostname: str) -> re.Pattern:
+    """缓冲尾部提示符匹配：真机提示符常无行尾换行（游标停在 > 后）。"""
+    h = re.escape(hostname)
+    return re.compile(rf"(?:\n|^)[ \t]*(?:<{h}>|\[{h}\]|{h}>)[ \t\r]*\Z", re.IGNORECASE)
 
 
 class ChannelReader:
@@ -55,6 +61,14 @@ class ChannelReader:
         line, self._buf = self._buf.split(b"\n", 1)
         return line.rstrip(b"\r").decode("utf-8", errors="replace")
 
+    def tail_prompt(self, re_prompt) -> bool:
+        """缓冲尾部（可无行尾换行）是否以提示符结尾。"""
+        text = self._buf.decode("utf-8", errors="replace")
+        return re_prompt.search(text) is not None
+
+    def clear(self) -> None:
+        self._buf = b""
+
 
 def collect_output(
     reader,
@@ -71,15 +85,17 @@ def collect_output(
     prompt_timeout/screen_timeout 为参数便于测试注入短超时。
     """
     try:
-        if not _wait_for_prompt(reader, hostname, prompt_timeout, is_stopped):
+        ok, seen = _wait_for_prompt(reader, hostname, prompt_timeout, is_stopped)
+        if not ok:
             return CollectResult(
                 "FAIL",
                 "连接后30秒未出现命令提示符(连接失败/认证失败/不可达/主机名与提示符不符)",
-                "",
+                seen,
             )
         send("screen-length 0 temporary")
-        if not _wait_for_prompt(reader, hostname, screen_timeout, is_stopped):
-            return CollectResult("FAIL", "关闭分页后未回到命令提示符", "")
+        ok, seen = _wait_for_prompt(reader, hostname, screen_timeout, is_stopped)
+        if not ok:
+            return CollectResult("FAIL", "关闭分页后未回到命令提示符", seen)
         send(command)
         outcome, lines = _read_command_output(reader, send, hostname, timeout_s, is_stopped)
         output = "\n".join(lines)
@@ -126,25 +142,36 @@ def collect_from_server(
             pass
 
 
-def _wait_for_prompt(reader, hostname, timeout_s, is_stopped) -> bool:
-    re_prompt = prompt_re(hostname)
+def _wait_for_prompt(reader, hostname, timeout_s, is_stopped):
+    """等待提示符。返回 (是否出现, 等待期间收到的文本)。
+
+    真机提示符常无行尾换行（游标停在 > 后），需同时检测完整行与缓冲尾部。
+    """
+    re_line = prompt_re(hostname)
+    re_tail = prompt_tail_re(hostname)
+    seen = []
     deadline = time.monotonic() + timeout_s
     while True:
         if is_stopped():
             raise StoppedError
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return False
+            return False, "\n".join(seen)
         line = reader.read_line(min(remaining, 2.0))
-        if line is None:
+        if line is not None:
+            if re_line.match(line):
+                return True, "\n".join(seen)
+            seen.append(line)
             continue
-        if re_prompt.match(line):
-            return True
+        if reader.tail_prompt(re_tail):
+            reader.clear()
+            return True, "\n".join(seen)
 
 
 def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
     """返回 ("done"|"timeout", 输出行列表)。"""
-    re_prompt = prompt_re(hostname)
+    re_line = prompt_re(hostname)
+    re_tail = prompt_tail_re(hostname)
     lines = []
     deadline = time.monotonic() + timeout_s
     while True:
@@ -154,11 +181,14 @@ def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
         if remaining <= 0:
             return "timeout", lines
         line = reader.read_line(min(remaining, 2.0))
-        if line is None:
+        if line is not None:
+            if re_line.match(line):
+                return "done", lines
+            if "---- More ----" in line:
+                send(" ")
+                continue
+            lines.append(line)
             continue
-        if re_prompt.match(line):
+        if reader.tail_prompt(re_tail):
+            reader.clear()
             return "done", lines
-        if "---- More ----" in line:
-            send(" ")
-            continue
-        lines.append(line)
