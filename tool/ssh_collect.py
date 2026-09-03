@@ -37,19 +37,23 @@ def prompt_tail_re(hostname: str) -> re.Pattern:
 
 
 class ChannelReader:
-    """从 paramiko channel 按行读取（缓冲 + 调用方给定单次超时上限）。"""
+    """从 paramiko channel 收数据的缓冲读取器。
+
+    接口：fill（阻塞收数据）/ read_line_available（非阻塞取整行）/
+    tail_prompt（缓冲尾部提示符检测，提示符可无行尾换行）/ clear。
+    """
 
     def __init__(self, chan):
         self._chan = chan
         self._buf = b""
 
-    def read_line(self, timeout_s: float) -> str | None:
-        """返回一行（不含行尾换行）；超时返回 None；连接关闭抛 ConnectionClosed。"""
+    def fill(self, timeout_s: float) -> bool:
+        """阻塞接收数据填入缓冲；超时返回 False；连接关闭抛 ConnectionClosed。"""
         deadline = time.monotonic() + timeout_s
-        while b"\n" not in self._buf:
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return None
+                return False
             self._chan.settimeout(remaining)
             try:
                 data = self._chan.recv(4096)
@@ -58,6 +62,12 @@ class ChannelReader:
             if not data:
                 raise ConnectionClosed
             self._buf += data
+            return True
+
+    def read_line_available(self) -> str | None:
+        """缓冲中已有完整行则取出一行（不阻塞）；否则返回 None。"""
+        if b"\n" not in self._buf:
+            return None
         line, self._buf = self._buf.split(b"\n", 1)
         return line.rstrip(b"\r").decode("utf-8", errors="replace")
 
@@ -80,7 +90,7 @@ def collect_output(
     prompt_timeout: float = 30.0,
     screen_timeout: float = 15.0,
 ) -> CollectResult:
-    """取数状态机。reader.read_line(timeout)->str|None；send(text)；is_stopped()->bool。
+    """取数状态机。reader 需实现 fill/read_line_available/tail_prompt/clear；send(text)；is_stopped()->bool。
 
     prompt_timeout/screen_timeout 为参数便于测试注入短超时。
     """
@@ -145,7 +155,7 @@ def collect_from_server(
 def _wait_for_prompt(reader, hostname, timeout_s, is_stopped):
     """等待提示符。返回 (是否出现, 等待期间收到的文本)。
 
-    真机提示符常无行尾换行（游标停在 > 后），需同时检测完整行与缓冲尾部。
+    事件式检测：每次收到数据立即检查完整行与缓冲尾部，提示符可无行尾换行。
     """
     re_line = prompt_re(hostname)
     re_tail = prompt_tail_re(hostname)
@@ -154,10 +164,7 @@ def _wait_for_prompt(reader, hostname, timeout_s, is_stopped):
     while True:
         if is_stopped():
             raise StoppedError
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False, "\n".join(seen)
-        line = reader.read_line(min(remaining, 2.0))
+        line = reader.read_line_available()
         if line is not None:
             if re_line.match(line):
                 return True, "\n".join(seen)
@@ -166,10 +173,14 @@ def _wait_for_prompt(reader, hostname, timeout_s, is_stopped):
         if reader.tail_prompt(re_tail):
             reader.clear()
             return True, "\n".join(seen)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, "\n".join(seen)
+        reader.fill(min(remaining, 0.2))
 
 
 def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
-    """返回 ("done"|"timeout", 输出行列表)。"""
+    """返回 ("done"|"timeout", 输出行列表)。事件式检测。"""
     re_line = prompt_re(hostname)
     re_tail = prompt_tail_re(hostname)
     lines = []
@@ -177,10 +188,7 @@ def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
     while True:
         if is_stopped():
             raise StoppedError
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return "timeout", lines
-        line = reader.read_line(min(remaining, 2.0))
+        line = reader.read_line_available()
         if line is not None:
             if re_line.match(line):
                 return "done", lines
@@ -192,3 +200,7 @@ def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
         if reader.tail_prompt(re_tail):
             reader.clear()
             return "done", lines
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "timeout", lines
+        reader.fill(min(remaining, 0.2))

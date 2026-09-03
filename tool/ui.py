@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -16,6 +17,14 @@ from tool.taskfiles import Server, is_valid_ip, parse_server_line, read_raw
 
 def default_excel_name() -> str:
     return "SecureCRT巡检结果_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
+
+
+AUTO_NAME_RE = re.compile(r"SecureCRT巡检结果_\d{8}_\d{6}\.xlsx$")
+
+
+def is_auto_generated_name(path: str) -> bool:
+    """保存路径是否仍是自动生成格式的文件名（用户未手动改名）。"""
+    return AUTO_NAME_RE.match(Path(path).name) is not None
 
 
 class MainWindow:
@@ -249,6 +258,10 @@ class MainWindow:
 
     def _on_start(self) -> None:
         self._sync_config_from_ui()
+        if is_auto_generated_name(self.cfg.excel_path):
+            fresh = str(Path(self.cfg.excel_path).parent / default_excel_name())
+            self.cfg.excel_path = fresh
+            self.excel_var.set(fresh)
         err = self._validate()
         if err:
             messagebox.showerror("参数错误", err)

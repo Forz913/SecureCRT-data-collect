@@ -13,15 +13,18 @@ from tool.ssh_collect import (
 
 
 class FakeReader:
-    """脚本化行源：按顺序吐出行，耗尽后返回 None（超时）。"""
+    """脚本化行源：按顺序吐出行，耗尽后无行可读。"""
 
     def __init__(self, script):
         self._lines = list(script)
 
-    def read_line(self, timeout_s):
+    def read_line_available(self):
         if self._lines:
             return self._lines.pop(0)
         return None
+
+    def fill(self, timeout_s):
+        return False  # 测试假源不阻塞，立即返回
 
     def tail_prompt(self, re_prompt):
         return False
@@ -114,7 +117,7 @@ def test_stopped_returns_stopped():
 
 def test_connection_closed_maps_to_fail():
     class ClosedReader(FakeReader):
-        def read_line(self, timeout_s):
+        def fill(self, timeout_s):
             raise ConnectionClosed
 
     result = collect_output(ClosedReader([]), FakeSender(), "GDHEY-TEST",
@@ -124,7 +127,11 @@ def test_connection_closed_maps_to_fail():
 
 
 class FakeChan:
-    """伪造 paramiko channel：按脚本吐字节块，耗尽后模拟 socket 超时。"""
+    """伪造 paramiko channel：按脚本吐字节块，耗尽后模拟 socket 超时。
+
+    recv 每次返回「凑齐至少一整行」的字节（模拟真实 socket 合并多次小写入），
+    一次 fill 可能吞掉多个块；队列耗尽且无任何字节时抛 socket.timeout。
+    """
 
     def __init__(self, chunks):
         self._chunks = list(chunks)
@@ -134,25 +141,34 @@ class FakeChan:
         self.timeout = t
 
     def recv(self, n):
-        if self._chunks:
-            return self._chunks.pop(0)
-        raise socket.timeout
+        data = b""
+        while self._chunks:
+            data += self._chunks.pop(0)
+            if b"\n" in data:
+                break
+        if not data:
+            raise socket.timeout
+        return data
 
 
 def test_channel_reader_assembles_lines_across_chunks():
     r = ChannelReader(FakeChan([b"hel", b"lo\r\nwor", b"ld\r\n"]))
-    assert r.read_line(1.0) == "hello"
-    assert r.read_line(1.0) == "world"
+    assert r.fill(1.0) is True
+    assert r.read_line_available() == "hello"
+    assert r.fill(1.0) is True
+    assert r.read_line_available() == "world"
 
 
 def test_channel_reader_strips_crlf():
     r = ChannelReader(FakeChan([b"a\r\n"]))
-    assert r.read_line(1.0) == "a"
+    r.fill(1.0)
+    assert r.read_line_available() == "a"
 
 
 def test_channel_reader_replaces_bad_utf8():
     r = ChannelReader(FakeChan([b"\xff\xfe\r\n"]))
-    line = r.read_line(1.0)
+    r.fill(1.0)
+    line = r.read_line_available()
     assert line is not None
     assert "\r" not in line
 
@@ -164,7 +180,7 @@ def test_channel_reader_raises_connection_closed_on_eof():
 
     r = ChannelReader(EofChan([]))
     with pytest.raises(ConnectionClosed):
-        r.read_line(1.0)
+        r.fill(1.0)
 
 
 def test_screen_length_timeout_branch():
@@ -188,20 +204,9 @@ def test_prompt_re_is_case_insensitive():
 
 
 def test_channel_reader_tail_prompt_and_clear():
-    class ChunkChan:
-        def __init__(self, chunks):
-            self._chunks = list(chunks)
-
-        def settimeout(self, t):
-            pass
-
-        def recv(self, n):
-            if self._chunks:
-                return self._chunks.pop(0)
-            raise socket.timeout
-
-    r = ChannelReader(ChunkChan([b"banner\r\nGDHEY-TEST>"]))
-    assert r.read_line(0.1) == "banner"
+    r = ChannelReader(FakeChan([b"banner\r\nGDHEY-TEST>"]))
+    r.fill(1.0)
+    assert r.read_line_available() == "banner"
     assert r.tail_prompt(prompt_tail_re("GDHEY-TEST"))
     r.clear()
     assert not r.tail_prompt(prompt_tail_re("GDHEY-TEST"))
