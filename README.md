@@ -13,13 +13,13 @@
 ## 使用
 
 1. 把 `dist/SecureCRT批量取数工具.exe` 拷贝到能访问目标服务器的机器任意可写目录，双击运行（免安装）
-2. 填服务器清单、查询指令（如 `disp alarm hardware`）、Excel 保存位置，点"开始"
+2. 填服务器清单、查询指令（如 `disp alarm hardware`）、Excel 保存位置，点"开始"（默认文件名每次运行自动刷新为当前时间）
 
 > （v2 直连版无需 SecureCRT；v1 SecureCRT 版见 main 分支）
 
 详细说明与真实环境验证清单见 [docs/使用与验证说明.md](docs/使用与验证说明.md)。
 
-> 目标设备需为华为 VRP 设备（提示符适配 `<主机名>` / `[主机名]` / 裸 `主机名>` 三种形态）。
+> 目标设备需为华为 VRP 设备（提示符适配 `<主机名>` / `[主机名]` / 裸 `主机名>` 三种形态，匹配忽略大小写）。
 
 ## 开发
 
@@ -28,7 +28,7 @@
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 
-# 测试（53 个用例；模拟模式覆盖全流程，无需 SecureCRT/网络）
+# 测试（57 个用例；模拟模式覆盖全流程，无需 SecureCRT/网络）
 .venv/Scripts/python -m pytest tests/ -q
 
 # 运行（开发模式）
@@ -54,7 +54,7 @@ cmd //c build.bat   # 产物: dist/SecureCRT批量取数工具.exe
 app.py              入口
 tool/               主程序模块（ui/runner/ssh_collect/ssh_client/parser/excel_writer/config/taskfiles/simulation/paths）
 samples/            模拟模式样例输出
-tests/              53 个 pytest 用例
+tests/              57 个 pytest 用例（含模拟华为设备 SSH 服务器端到端）
 docs/               使用说明、验证清单、设计文档、实现计划
 build.bat           PyInstaller 打包脚本
 ```
