@@ -20,8 +20,8 @@ class ConnectionClosed(Exception):
 @dataclass
 class CollectResult:
     status: str  # SUCCESS / FAIL / STOPPED
-    reason: str
-    output: str
+    reason: str  # FAIL 时的中文原因；SUCCESS 为空串
+    output: str  # 已收屏幕文本；SUCCESS 为完整输出，FAIL 保留已收内容便于排障
 
 
 def prompt_re(hostname: str) -> re.Pattern:
@@ -31,7 +31,11 @@ def prompt_re(hostname: str) -> re.Pattern:
 
 
 def prompt_tail_re(hostname: str) -> re.Pattern:
-    """缓冲尾部提示符匹配：真机提示符常无行尾换行（游标停在 > 后）。"""
+    """缓冲尾部提示符匹配：真机提示符常无行尾换行（游标停在 > 后）。
+
+    前置 (?:\n|^) 约束保证提示符必须是独立一段的开头，
+    避免把命令回显行（如 "GDHEY-TEST>disp xxx"）误判为提示符。
+    """
     h = re.escape(hostname)
     return re.compile(rf"(?:\n|^)[ \t]*(?:<{h}>|\[{h}\]|{h}>)[ \t\r]*\Z", re.IGNORECASE)
 
@@ -102,6 +106,8 @@ def collect_output(
                 "连接后30秒未出现命令提示符(连接失败/认证失败/不可达/主机名与提示符不符)",
                 seen,
             )
+        # 先关分页再发指令：避免输出被 ---- More ---- 分页打断；
+        # 关分页失败的老设备由 _read_command_output 里的发空格翻页兜底
         send("screen-length 0 temporary")
         ok, seen = _wait_for_prompt(reader, hostname, screen_timeout, is_stopped)
         if not ok:
@@ -114,11 +120,15 @@ def collect_output(
                 "FAIL", f"指令执行超时({timeout_s}秒，已保留已收内容)", output
             )
         if sum(len(line.strip()) for line in lines) < 1:
+            # 空输出判定：全部行去空白后无任何内容才算空；
+            # 无告警但正常回显表头的设备不会误判（表头+分隔线远不止 1 字符）
             return CollectResult("FAIL", "输出为空", output)
         return CollectResult("SUCCESS", "", output)
     except StoppedError:
         return CollectResult("STOPPED", "用户停止", "")
     except ConnectionClosed:
+        # 注意：连接中断时已收内容当前不保留（与超时路径的"已保留已收内容"不同），
+        # 设备重启/网络抖动导致输出半截时 raw 不落盘
         return CollectResult("FAIL", "SSH连接被远端关闭", "")
 
 
@@ -130,6 +140,7 @@ def collect_from_server(
     from tool.ssh_client import connect_channel  # 延迟导入：状态机单测不依赖该模块
 
     try:
+        # legacy 标志（兼容模式是否启用）当前未消费，预留
         client, chan, legacy = connect_channel(ip, user, password, port, connect_timeout)
     except paramiko.AuthenticationException:
         return CollectResult("FAIL", "认证失败(用户名或密码错误)", "")
@@ -176,6 +187,8 @@ def _wait_for_prompt(reader, hostname, timeout_s, is_stopped):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False, "\n".join(seen)
+        # 0.2 秒切片：即使期间无数据也定期返回循环顶，保证 is_stopped
+        # 及时响应；数据一到达就立即检查尾部，慢速输出也不会漏判提示符
         reader.fill(min(remaining, 0.2))
 
 
@@ -193,6 +206,8 @@ def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
             if re_line.match(line):
                 return "done", lines
             if "---- More ----" in line:
+                # 关分页失败的老设备仍会分页：发空格翻下一页，
+                # More 标记行本身不入输出（parser 侧同样忽略）
                 send(" ")
                 continue
             lines.append(line)
@@ -203,4 +218,4 @@ def _read_command_output(reader, send, hostname, timeout_s, is_stopped):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return "timeout", lines
-        reader.fill(min(remaining, 0.2))
+        reader.fill(min(remaining, 0.2))  # 同上：0.2 秒切片兼顾停止响应与不漏判

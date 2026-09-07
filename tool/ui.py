@@ -1,4 +1,11 @@
-"""Tkinter 主界面。"""
+"""Tkinter 主界面：清单管理、运行控制、状态/日志展示与配置持久化。
+
+线程安全约定（与 runner 模块的线程契约配套）：
+- 采集 worker 在后台线程运行，结果只经队列回传；
+- UI 侧通过 root.after(POLL_MS) 周期性调用 _tick() 驱动调度器，
+  _on_event 只在 _tick 内被触发，因此所有界面更新天然在 UI 线程执行；
+- 任何方法都不要在工作线程里触碰 Tk 控件。
+"""
 from __future__ import annotations
 
 import datetime
@@ -16,6 +23,7 @@ from tool.taskfiles import Server, is_valid_ip, parse_server_line, read_raw
 
 
 def default_excel_name() -> str:
+    """按当前时间生成默认保存文件名，精确到秒。"""
     return "SecureCRT巡检结果_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
 
 
@@ -23,18 +31,23 @@ AUTO_NAME_RE = re.compile(r"SecureCRT巡检结果_\d{8}_\d{6}\.xlsx$")
 
 
 def is_auto_generated_name(path: str) -> bool:
-    """保存路径是否仍是自动生成格式的文件名（用户未手动改名）。"""
+    """保存路径是否仍是自动生成格式的文件名（用户未手动改名）。
+
+    用于 _on_start：自动名每次运行前刷新为当前时间，
+    避免同秒内重跑时新结果被旧文件覆盖。
+    """
     return AUTO_NAME_RE.match(Path(path).name) is not None
 
 
 class MainWindow:
-    POLL_MS = 400
+    POLL_MS = 400  # 调度器轮询间隔（毫秒），也是状态/日志刷新的节奏
 
     def __init__(self, root: tk.Tk):
+        """搭建界面、加载 config.json 并挂接窗口关闭回调。"""
         self.root = root
         self.cfg_path = app_dir() / "config.json"
         self.cfg: AppConfig = cfg_load(self.cfg_path)
-        self.runner: Runner | None = None
+        self.runner: Runner | None = None  # 仅运行期间非空，结束/失败后置回 None
         self._build()
         self._load_from_config()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -42,6 +55,7 @@ class MainWindow:
     # ---------- 界面搭建 ----------
 
     def _build(self) -> None:
+        """构建全部控件（布局自上而下：保存位置/指令/并发/清单/控制/状态日志）。"""
         self.root.geometry("980x680")
         self.root.minsize(860, 560)
         pad = {"padx": 6, "pady": 3}
@@ -72,6 +86,8 @@ class MainWindow:
         ttk.Label(row3, text="并发数:").pack(side="left")
         self.concurrency_var = tk.IntVar(value=5)
         ttk.Spinbox(row3, from_=1, to=10, textvariable=self.concurrency_var, width=4).pack(side="left", padx=4)
+        # 注意：勾选框初值 True 与 config 默认 False 不一致——_load_from_config
+        # 会用配置值覆盖；此处初值仅保证界面控件创建时非空
         self.sim_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(row3, text="模拟取数（测试用，不连真实服务器）", variable=self.sim_var).pack(side="left", padx=12)
 
@@ -125,6 +141,7 @@ class MainWindow:
     # ---------- 清单操作 ----------
 
     def _servers_from_tree(self) -> list[Server]:
+        """按表格当前行序读出服务器清单（配置同步的数据源）。"""
         servers = []
         for iid in self.server_tree.get_children():
             values = self.server_tree.item(iid, "values")
@@ -133,19 +150,27 @@ class MainWindow:
         return servers
 
     def _refresh_server_tree(self) -> None:
+        """用 cfg.servers 重建清单表格（增删改后统一走这里刷新）。"""
         self.server_tree.delete(*self.server_tree.get_children())
         for s in self.cfg.servers:
             self.server_tree.insert("", "end", values=(s.ip, s.hostname, s.username, s.password))
 
     def _add_server(self) -> None:
+        """打开添加对话框（iid=None 表示新增）。"""
         self._open_server_dialog(None)
 
     def _edit_server(self, _event=None) -> None:
+        """双击清单行打开编辑对话框。"""
         sel = self.server_tree.selection()
         if sel:
             self._open_server_dialog(sel[0])
 
     def _open_server_dialog(self, iid: str | None) -> None:
+        """新增/编辑共用的模态对话框：四字段录入 + 非空/IP 格式校验。
+
+        校验通过后直接写入 cfg.servers 并刷新表格；
+        校验失败弹警告且对话框不关闭，用户可原地修改。
+        """
         dlg = tk.Toplevel(self.root)
         dlg.title("编辑服务器" if iid else "添加服务器")
         dlg.transient(self.root)
@@ -167,6 +192,7 @@ class MainWindow:
             if not server.ip or not server.username or not server.password:
                 messagebox.showwarning("提示", "IP、账号、密码不能为空", parent=dlg)
                 return
+            # 与粘贴/导入路径一致校验 IPv4；IP 会进结果文件名，格式校验同时防路径穿越
             if not is_valid_ip(server.ip):
                 messagebox.showwarning("提示", "IP 格式无效（应为 IPv4 地址）", parent=dlg)
                 return
@@ -181,6 +207,7 @@ class MainWindow:
         ttk.Button(dlg, text="取消", command=dlg.destroy).grid(row=4, column=1, pady=8)
 
     def _paste_servers(self) -> None:
+        """从剪贴板粘贴多行清单，逐行按 'IP 主机名 账号 密码' 解析，无效行跳过。"""
         try:
             text = self.root.clipboard_get()
         except tk.TclError:
@@ -196,6 +223,7 @@ class MainWindow:
         self._log(f"粘贴完成：新增 {added} 台")
 
     def _import_servers(self) -> None:
+        """从文本文件导入清单：先按 UTF-8 解码，失败回退 GBK（中文 Windows 常见）。"""
         path = filedialog.askopenfilename(
             title="选择服务器清单文件",
             filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
@@ -217,6 +245,7 @@ class MainWindow:
         self._log(f"导入完成：{path} 新增 {added} 台")
 
     def _delete_selected(self) -> None:
+        """按选中行的值删除（不按位置：多选删除时位置会随删除前移）。"""
         sel = self.server_tree.selection()
         if not sel:
             return
@@ -226,11 +255,13 @@ class MainWindow:
         self._refresh_server_tree()
 
     def _clear_servers(self) -> None:
+        """清空清单（有确认弹窗）。"""
         if messagebox.askyesno("确认", "清空所有服务器？"):
             self.cfg.servers.clear()
             self._refresh_server_tree()
 
     def _browse_excel(self) -> None:
+        """打开保存位置选择框，选中后回填输入框。"""
         initial = self.excel_var.get() or default_excel_name()
         path = filedialog.asksaveasfilename(
             title="选择 Excel 保存位置",
@@ -245,6 +276,7 @@ class MainWindow:
     # ---------- 运行控制 ----------
 
     def _validate(self) -> str:
+        """运行前参数校验，返回错误文案（空串表示通过）。"""
         if not self.cfg.servers:
             return "服务器清单为空"
         ips = [s.ip for s in self.cfg.servers]
@@ -257,6 +289,12 @@ class MainWindow:
         return ""
 
     def _on_start(self) -> None:
+        """开始按钮：同步界面 → 校验 → 建 Runner 并启动，然后进入轮询。
+
+        步骤：自动生成的文件名刷新为当前时间（防同秒重跑覆盖旧结果）；
+        校验失败弹错返回；文件已存在先确认覆盖；配置落盘后创建 Runner，
+        启动失败（如结果目录不可建）恢复按钮状态并清空 runner。
+        """
         self._sync_config_from_ui()
         if is_auto_generated_name(self.cfg.excel_path):
             fresh = str(Path(self.cfg.excel_path).parent / default_excel_name())
@@ -295,11 +333,17 @@ class MainWindow:
         self.root.after(self.POLL_MS, self._tick)
 
     def _on_stop(self) -> None:
+        """停止按钮：置停止标志，在跑的采集线程由采集器轮询感知后自行结束。"""
         if self.runner:
             self.runner.request_stop()
             self._log("已请求停止")
 
     def _tick(self) -> None:
+        """轮询调度器：全部完成则收尾，否则更新进度并预约下一轮。
+
+        本方法始终在 UI 线程执行（由 after 调度），是调度器与界面之间
+        唯一的驱动入口；_on_event 只在此链路内触发。
+        """
         if self.runner and self.runner.tick():
             self._on_done()
         elif self.runner:
@@ -307,6 +351,12 @@ class MainWindow:
             self.root.after(self.POLL_MS, self._tick)
 
     def _on_done(self) -> None:
+        """全部完成后的收尾：解析 raw → 写 Excel → 复位按钮。
+
+        状态流转：SUCCESS 的记录解析 raw 文件得到告警列表；
+        raw 文件缺失（如落盘失败）改判 FAIL 并给出原因。
+        写 Excel 失败时只复位按钮不清结果，用户可重试或另存。
+        """
         results = self.runner.results()
         for r in results:
             if r.status == "SUCCESS":
@@ -335,6 +385,10 @@ class MainWindow:
         self.runner = None
 
     def _on_event(self, event: str, ip: str, payload: str) -> None:
+        """调度器事件回调：log 进日志框，status 更新状态表格对应行。
+
+        仅在 _tick 链路内被调用，因此始终运行在 UI 线程。
+        """
         if event == "log":
             self._log(f"[{ip}] {payload}" if ip else payload)
         elif event == "status":
@@ -342,6 +396,7 @@ class MainWindow:
             self._update_status_row(ip, payload)
 
     def _reset_status_ui(self) -> None:
+        """每次运行开始前清空状态表格、日志与进度条。"""
         self.status_tree.delete(*self.status_tree.get_children())
         for s in self.cfg.servers:
             self.status_tree.insert("", "end", values=(s.ip, s.hostname, "等待中"))
@@ -351,6 +406,7 @@ class MainWindow:
         self.progress["value"] = 0
 
     def _update_status_row(self, ip: str, status: str) -> None:
+        """把某台服务器的状态更新到状态表格（按 IP 找到对应行）。"""
         status_cn = {"SUCCESS": "成功", "FAIL": "失败", "STOPPED": "已停止"}.get(status, status)
         for iid in self.status_tree.get_children():
             if self.status_tree.item(iid, "values")[0] == ip:
@@ -362,6 +418,11 @@ class MainWindow:
     # ---------- 配置与日志 ----------
 
     def _sync_config_from_ui(self) -> None:
+        """把界面各输入框的值写回 cfg（运行前/关闭前调用）。
+
+        超时与并发输入做钳制：手工输入非法值（如清空 Spinbox）时
+        退回默认值并夹到允许区间，避免把坏参数传给调度器。
+        """
         self.cfg.servers = self._servers_from_tree()
         self.cfg.command = self.command_var.get()
         try:
@@ -378,6 +439,7 @@ class MainWindow:
         self.cfg.excel_path = self.excel_var.get().strip()
 
     def _load_from_config(self) -> None:
+        """启动时把 cfg 填充到各控件（无保存路径时给默认文件名）。"""
         self.excel_var.set(self.cfg.excel_path or str(app_dir() / default_excel_name()))
         self.command_var.set(self.cfg.command)
         self.timeout_var.set(self.cfg.timeout)
@@ -386,12 +448,18 @@ class MainWindow:
         self._refresh_server_tree()
 
     def _save_config(self) -> None:
+        """保存配置；失败（目录不可写）只警告不中断流程。"""
         try:
             cfg_save(self.cfg_path, self.cfg)
         except OSError as e:
             messagebox.showwarning("提示", f"配置保存失败（目录可能不可写）：{e}")
 
     def _on_close(self) -> None:
+        """窗口关闭回调：运行中先确认，确认后请求停止；保存配置后销毁窗口。
+
+        注意：已启动的采集线程不会被强杀，它们由采集器轮询停止标志自行结束；
+        本次运行的独立目录保证旧线程的迟到写入不会污染下次运行。
+        """
         if self.runner:
             if not messagebox.askyesno("确认", "任务正在运行，确定退出？"):
                 return
@@ -401,6 +469,7 @@ class MainWindow:
         self.root.destroy()
 
     def _log(self, msg: str) -> None:
+        """向日志框追加一行（带时间戳），自动滚到末尾。"""
         self.log_text.config(state="normal")
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_text.insert("end", f"[{ts}] {msg}\n")
